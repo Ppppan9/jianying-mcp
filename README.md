@@ -195,8 +195,8 @@ node dist/mutation_check.js ./test-media
                          VERDICT: PASS
 [4] compare_meta_info.py VERDICT: MATCH (25 fields vs the reference template)
 [5] guard_coverage.js  Guards: 34 enforced, 0 not enforced
-[6] protocol_check.js   Protocol: 24 passed, 0 failed
-[7] mutation_check.js   Mutations: 22 of 22 caught, 0 survived
+[6] protocol_check.js   Protocol: 28 passed, 0 failed
+[7] mutation_check.js   Mutations: 23 of 23 caught, 0 survived
 ```
 
 The fifth suite is a different question from the others: not "does the draft
@@ -395,8 +395,8 @@ redistributed here.
                          VERDICT: PASS
 [4] compare_meta_info.py VERDICT: MATCH (25 fields vs the reference template)
 [5] guard_coverage.js  Guards: 34 enforced, 0 not enforced
-[6] protocol_check.js   Protocol: 24 passed, 0 failed
-[7] mutation_check.js   Mutations: 22 of 22 caught, 0 survived
+[6] protocol_check.js   Protocol: 28 passed, 0 failed
+[7] mutation_check.js   Mutations: 23 of 23 caught, 0 survived
 ```
 
 The fifth suite is a different question from the others: not "does the draft
