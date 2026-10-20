@@ -282,8 +282,14 @@ async function tryFfprobe(abs) {
         const rawDur = video
             ? video.duration ?? data.format?.duration
             : audio?.duration ?? data.format?.duration;
-        if (rawDur)
-            durationUs = Math.round(Number(rawDur) * US);
+        if (rawDur !== undefined && rawDur !== null) {
+            const parsed = Number(rawDur);
+            // A decoder may report an unknown duration as "N/A"; that becomes NaN
+            // and would otherwise be written into the draft as null.
+            if (Number.isFinite(parsed) && parsed > 0) {
+                durationUs = Math.round(parsed * US);
+            }
+        }
         if (video) {
             // A still image exposes a video stream, but the duration it reports is
             // unreliable: some decoders report nothing, others report a single
@@ -291,13 +297,23 @@ async function tryFfprobe(abs) {
             // signal, combined with a frame count of at most one.
             const ext = path.extname(abs).toLowerCase();
             const isImageExtension = IMAGE_EXTENSIONS.has(ext);
-            const frameCount = video.nb_frames !== undefined && video.nb_frames !== null
+            // A decoder may report an unknown frame count as "N/A", which becomes
+            // NaN and would make every comparison false.
+            const parsedFrames = video.nb_frames !== undefined && video.nb_frames !== null
                 ? Number(video.nb_frames)
-                : undefined;
-            const isStill = isImageExtension &&
-                (frameCount === undefined ? true : frameCount <= 1);
+                : NaN;
+            const frameCount = Number.isFinite(parsedFrames) ? parsedFrames : undefined;
+            const isStill = isImageExtension && (frameCount === undefined || frameCount <= 1);
+            // A still image has no intrinsic length. The duration reported for it
+            // is one frame's worth, which would make the clip a 40 millisecond
+            // blip, so it is replaced by the reference's fallback.
+            const duration = isStill
+                ? STILL_IMAGE_DEFAULT_DURATION_US
+                : durationUs > 0
+                    ? durationUs
+                    : STILL_IMAGE_DEFAULT_DURATION_US;
             return {
-                duration: durationUs > 0 ? durationUs : STILL_IMAGE_DEFAULT_DURATION_US,
+                duration,
                 width: Number(video.width) || 1920,
                 height: Number(video.height) || 1080,
                 kind: "video",
@@ -456,10 +472,10 @@ export class Draft {
      */
     ensureTrack(type, relativeIndex) {
         // A malformed index must not produce a NaN render index, which would be
-        // written into the draft as null.
-        const index = Number.isFinite(relativeIndex)
-            ? Math.max(0, Math.trunc(relativeIndex))
-            : 0;
+        // written into the draft as null. A numeric string is accepted, because
+        // the index may arrive from a loosely typed client.
+        const numeric = typeof relativeIndex === "number" ? relativeIndex : Number(relativeIndex);
+        const index = Number.isFinite(numeric) ? Math.max(0, Math.trunc(numeric)) : 0;
         let track = this.tracks.find((t) => t.type === type && t.index === index);
         if (!track) {
             track = {

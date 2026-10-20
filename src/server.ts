@@ -404,7 +404,7 @@ const TOOLS: ToolDef[] = [
         {
           maxChars: args.maxChars ?? 18,
           style: args.style,
-          track: args.track ?? 0,
+          track: trackIndex(args.track),
         },
       );
       return {

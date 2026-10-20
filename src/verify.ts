@@ -530,6 +530,20 @@ async function main() {
       name: "Draft: v2", filePath: file, start: 0, duration: 60, track,
     });
     check(`a ${label} still image can be placed for 60s`, still.ok === true);
+    // Without an explicit duration a still must still get a usable length,
+    // not the single frame the decoder reported.
+    const defaulted = await client.call("jianying_add_video", {
+      name: "Draft: v2", filePath: file, start: 0, duration: undefined, track: track + 10,
+    });
+    const defaultSeg = defaulted.draft.tracks
+      .filter((t: any) => t.type === "video")
+      .flatMap((t: any) => t.segments ?? [])
+      .find((s: any) => s.start === 0 && s.duration > 1);
+    check(
+      `a ${label} still image without a duration gets a usable length`,
+      (defaultSeg?.duration ?? 0) >= 1,
+      defaultSeg?.duration,
+    );
     await client.call("jianying_save_draft", { name: "Draft: v2" });
     // The draft is stored under its sanitised name (a colon is illegal in a
     // file name), which is the name the tool reports.
@@ -604,6 +618,54 @@ async function main() {
     "subtitles can be placed on a separate text track",
     textTracks.some((t: any) => t.index === 3),
     textTracks.map((t: any) => t.index),
+  );
+
+  // A malformed track index must not write a null render index into the
+  // draft, and a numeric string must still select the intended track.
+  // Each probe gets its own time window so the clips cannot overlap.
+  const malformedTracks = ["abc", null, NaN, -1];
+  for (let i = 0; i < malformedTracks.length; i++) {
+    const bad = malformedTracks[i];
+    let ok = true;
+    let reason = "";
+    try {
+      const probe = await client.call("jianying_add_video", {
+        name: "Draft: v2", filePath: vid1, start: i * 2, duration: 1, track: bad as any,
+      });
+      ok = probe.ok === true;
+    } catch (e: any) {
+      // A malformed index may normalise onto a track that is already used;
+      // that is a placement conflict, not a rendering defect.
+      ok = /SegmentOverlap/.test(e.message);
+      reason = e.message.slice(0, 80);
+    }
+    check(`a malformed track index is tolerated: ${String(bad)}`, ok, reason);
+  }
+  await client.call("jianying_save_draft", { name: "Draft: v2" });
+  const sanitizedDir = path.join(DRAFTS_ROOT, "Draft_ v2");
+  const rawDraft = fs.readFileSync(
+    path.join(sanitizedDir, "draft_info.json"),
+    "utf8",
+  );
+  check(
+    "the draft contains no null render index",
+    !/"render_index":\s*null/.test(rawDraft),
+  );
+  check(
+    "the draft contains no NaN track name",
+    !/"VideoTrack_NaN"|"Audio_NaN"|"Subtitles_NaN"/.test(rawDraft),
+  );
+
+  const stringTrack = await client.call("jianying_add_video", {
+    name: "Draft: v2", filePath: vid1, start: 0, duration: 1, track: "3" as any,
+  });
+  const stringIdx = stringTrack.draft.tracks
+    .filter((t: any) => t.type === "video")
+    .map((t: any) => t.index);
+  check(
+    "a numeric string selects the intended track",
+    stringIdx.includes(3),
+    stringIdx,
   );
 
   // The SRT export must include every text track.

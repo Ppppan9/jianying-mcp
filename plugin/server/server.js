@@ -334,7 +334,7 @@ const TOOLS = [
             const segs = draft.addSubtitles(args.script, parseSeconds(args.start), parseSeconds(args.duration), {
                 maxChars: args.maxChars ?? 18,
                 style: args.style,
-                track: args.track ?? 0,
+                track: trackIndex(args.track),
             });
             return {
                 ok: true,
