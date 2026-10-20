@@ -127,6 +127,9 @@ jianying_close_draft    name=...
 | 拿含视频轨的文件当音频 | `must not contain a video track` |
 | 拿音频文件当视频素材 | `must not be an audio-only file` |
 | 负数的起点 / 时长 / 淡入淡出 | `must not be negative` |
+| `maxChars` 小于 1 | `must be a number of at least 1` |
+| 颜色分量不是 3 个 / alpha 不在 0~1 / 字号为负 / 对齐值非法 | `Invalid colour` / `Invalid alpha` / `Invalid font size` / `Invalid align` |
+| 音量不在 0~1 | `Invalid volume` |
 | 重复打开同名草稿 | `already open`（防止丢未保存的改动） |
 | 建同名草稿时磁盘上已有 | `already exists`（要覆盖得显式传 `overwrite=true`） |
 | 覆盖不是草稿的目录 | `does not look like a JianYing draft` |
@@ -137,6 +140,19 @@ jianying_close_draft    name=...
 看到这些报错就按提示改参数，**不要绕过去** —— 它们拦下的都是剪映会渲染错乱、或者会毁掉你已有文件的情况。
 
 被拒绝的调用**不会留下垃圾**：不会残留孤儿素材，也不会残留复制到草稿里的素材文件。
+
+## 打开已有草稿并续编
+
+`jianying_open_draft` 会把已有草稿读回内存，可以接着改再保存，**不会删掉原来的东西**。
+
+```bash
+jianying_open_draft   name=广告_解谜关卡_01     # 读回已有草稿
+jianying_add_text    name=广告_解谜关卡_01  text=新标题  start=0  duration=2
+jianying_save_draft  name=广告_解谜关卡_01     # 保存，保留原有内容
+jianying_close_draft name=广告_解谜关卡_01     # 用完关掉
+```
+
+只有**故意丢弃**已有草稿时才用 `overwrite=true` —— 那会删掉原工程。
 
 ## 导出
 
