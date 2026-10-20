@@ -379,8 +379,30 @@ JianYing mis-renders. This project closes them:
 | `add_subtitles` validates every line before adding any | A script that does not fit must not half-apply |
 | The media prober must not mistake cover art for a video track | An mp3 with an embedded cover is an audio file |
 | The stdin line buffer is capped | A peer sending no newline would grow it without bound |
+| Every message on the wire gets an answer | A dropped message leaves the caller waiting forever |
 | `export_srt` refuses to overwrite and refuses a non-`.srt` path | The path comes from the caller and may point at source media |
 | `create_draft` does not overwrite by default | Overwriting discards an existing project |
+| Tool arguments are checked against the declared schema | A missing field became `undefined` and opened a draft by that name |
+| Unknown argument keys are refused by name | `duraton` would silently drop a duration and move the clip |
+| The packaged server is checked for missing modules | A module left out of the bundle is a plugin that dies on startup |
+
+### The argument contract
+
+The input schema in `src/server.ts` is published to the client **and enforced
+by the server**. A client is not trusted to have checked it.
+
+| Schema type | Accepts | Why |
+|---|---|---|
+| `S.string` | a string | |
+| `S.number` | a number | The engine does not coerce these; a string would throw a confusing error deep inside |
+| `S.numeric` | a number, or a string that parses to a finite number | The engine reads these through `Number()` — `track`, `width`, `height`, `fps` |
+| `S.duration` | a number of seconds, or a duration string such as `"1m30s"` | `parseSeconds` handles both |
+| `S.enum` | one of the listed values | |
+
+A string that does not parse as a number is **refused**, not normalised to
+zero. `track: "3"` selects track 3; `track: "第一轨"` is an error. An earlier
+version normalised it to track 0, which put the clip on the wrong track and
+looked like it had worked.
 
 ---
 
@@ -544,7 +566,7 @@ new one.
 
 ## 7. Verification
 
-The implementation in `src/draft.ts` is validated in three layers.
+The implementation in `src/draft.ts` is validated in seven layers.
 
 ### Layer 1 — end-to-end functional suite
 
@@ -606,6 +628,39 @@ Prints the reference library's actual behaviour for multi-track render
 indices, clip speed, audio fades, out-of-range durations, overlap, image
 classification and audio material validation. Use it to re-check any rule
 before changing the engine.
+
+### Layer 5 — guard coverage
+
+```bash
+node dist/guard_coverage.js ./test-media ./out_drafts/guards
+```
+
+Asks a different question from the others: not "does the draft come out
+right" but "does every refusal actually happen". A guard that is never
+reached is a guard that does not protect.
+
+### Layer 6 — the wire protocol
+
+```bash
+node dist/protocol_check.js
+```
+
+Spawns the server and talks to it over a real pipe. The rule it enforces is
+that a request that arrives must always produce a response, and a message
+the server cannot read must produce an error rather than silence. Silence
+is the failure that hurts most — the caller waits for a reply that never
+comes.
+
+### Layer 7 — mutation check
+
+```bash
+node dist/mutation_check.js ./test-media
+```
+
+Breaks the engine on purpose, one rule at a time, and requires the suite to
+notice. A green suite proves nothing until you know it can go red. A
+mutation whose snippet no longer matches the source **fails the run** — it
+is a check that never ran, not a passing one.
 
 ---
 
