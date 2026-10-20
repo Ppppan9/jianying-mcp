@@ -300,6 +300,18 @@ docs/
 
 ---
 
+## Hands-on verification
+
+The automated suites prove the draft matches the reference implementation
+field for field. They cannot prove that JianYing itself opens it, because
+the application is not involved in the test.
+
+`npm run verify-drafts` produces three drafts for opening by hand — one
+covering the basics (video, music, voice-over, subtitles, a title), one
+covering the edges (a still image, a speed change, adjacent clips, a
+second video track), and one that is opened, edited and saved again. The
+generator makes its own media, so it runs anywhere ffmpeg does.
+
 ## Limitations
 
 - **Export is manual.** JianYing has no reliable headless render path on

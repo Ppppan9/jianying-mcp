@@ -165,7 +165,6 @@ A segment with a fade therefore carries **two** entries in
 `extra_material_refs`: its speed material and its fade material.
 
 ### Text material — `content` is a stringified JSON
-
 ```json
 {
   "id": "<uuid>",
@@ -191,6 +190,17 @@ upstream produces (`0.08000000000000002`). This project reproduces the
 upstream expression exactly.
 
 `alignment` defaults to `0` (left).
+
+**The `range` of a style counts Unicode code points**, not UTF-16 code
+units — `range: [0, len(text)]`. The reference implementation uses Python's
+`len`, which is the same, and it rescales ranges proportionally when the text
+is replaced, so the two agree.
+
+The difference only shows for characters outside the Basic Multilingual
+Plane — an emoji counts as one code point but two UTF-16 units. A caption
+made of two emoji therefore gets `range: [0, 2]` rather than `[0, 4]`. This
+matches the reference implementation; whether JianYing indexes by code point
+or by code unit can only be settled against the application itself.
 
 **`check_flag` is a bitmask** of the effects a text material carries:
 

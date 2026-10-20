@@ -33,6 +33,9 @@ jobs:
       - name: Guard coverage — every refusal must actually happen
         run: node dist/guard_coverage.js ./test-media ./out_drafts/guards
 
+      - name: Generate the hands-on verification drafts
+        run: node dist/make_verify_drafts.js ./verify-media ./verify-drafts
+
       - name: Validate the Plugin package
         run: python3 scripts/validate_plugin.py plugin
 
