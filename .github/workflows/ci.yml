@@ -82,3 +82,11 @@ jobs:
         run: |
           JY_UPSTREAM_HAS_MEDIAINFO=1 \
           node dist/diff_scenarios.js "$JY_UPSTREAM_SKILL" ./test-media ./diff_scenarios_mediainfo
+
+      # draft_meta_info.json is the project registry entry. The differential
+      # harness fingerprints only draft_info.json, so this file is compared
+      # separately against the reference template.
+      - name: Compare the registry entry with the reference template
+        run: |
+          node dist/gen_compare.js ./compare_drafts/mcp
+          python3 scripts/compare_meta_info.py ./compare_drafts/mcp/Compare_Mcp

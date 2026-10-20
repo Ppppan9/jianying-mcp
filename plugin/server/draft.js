@@ -200,8 +200,14 @@ function hardSplit(text, maxChars) {
 // ---------------------------------------------------------------------------
 // Media probing
 // ---------------------------------------------------------------------------
+/**
+ * Extensions of still-image media.
+ *
+ * GIF is deliberately absent: an animated GIF has a real duration and the
+ * reference implementation treats it as a video, not a still image.
+ */
 const IMAGE_EXTENSIONS = new Set([
-    ".jpg", ".jpeg", ".png", ".webp", ".bmp", ".tif", ".tiff", ".heic", ".gif",
+    ".jpg", ".jpeg", ".png", ".webp", ".bmp", ".tif", ".tiff", ".heic",
 ]);
 /**
  * Duration assigned to a still image that has no intrinsic duration.
@@ -433,7 +439,14 @@ export function resolveDraftsRoot(explicit) {
     const home = process.env.HOME || process.env.USERPROFILE || "";
     const candidates = [];
     if (process.platform === "darwin") {
-        candidates.push(path.join(home, "Movies", "JianyingPro", "User Data", "Projects", "com.lveditor.draft"), path.join(home, "Movies", "JianyingPro Drafts"), path.join(home, "Library", "Containers", "com.lemon.lvpro", "Data", "Library", "Application Support", "JianyingPro", "User Data", "Projects", "com.lveditor.draft"), path.join(home, "Library", "Containers", "com.bytedance.JianyingPro", "Data", "Library", "Application Support", "JianyingPro", "User Data", "Projects", "com.lveditor.draft"));
+        // The macOS draft location moved between releases and differs between the
+        // domestic (剪映) and international (CapCut) builds. Every known location
+        // is listed, because picking the wrong one means the draft is written
+        // where JianYing never looks.
+        //
+        // `com.lemon.jianyingpro` is the domestic macOS build; its drafts live
+        // under Application Support without the extra JianyingPro level.
+        candidates.push(path.join(home, "Movies", "JianyingPro", "User Data", "Projects", "com.lveditor.draft"), path.join(home, "Movies", "JianyingPro Drafts"), path.join(home, "Library", "Containers", "com.lemon.jianyingpro", "Data", "Library", "Application Support", "JianyingPro", "User Data", "Projects", "com.lveditor.draft"), path.join(home, "Library", "Containers", "com.lemon.jianyingpro", "Data", "Library", "Application Support", "JianyingPro Drafts"), path.join(home, "Library", "Containers", "com.lemon.lvpro", "Data", "Library", "Application Support", "JianyingPro", "User Data", "Projects", "com.lveditor.draft"), path.join(home, "Library", "Containers", "com.bytedance.JianyingPro", "Data", "Library", "Application Support", "JianyingPro", "User Data", "Projects", "com.lveditor.draft"));
     }
     else if (process.platform === "win32") {
         const appData = process.env.LOCALAPPDATA || path.join(home, "AppData", "Local");
@@ -944,7 +957,7 @@ export class Draft {
             targetTimerange: targetRange,
             sourceTimerange: { start: sourceStartUs, duration: sourceUs },
             speed: effectiveSpeed,
-            volume: spec.volume ?? 1.0,
+            volume: normalizeVolume(spec.volume),
             extraMaterialRefs: [],
             clip: defaultClipSettings(),
             speedId: this.registerSpeed(effectiveSpeed),
@@ -990,7 +1003,7 @@ export class Draft {
             targetTimerange: targetRange,
             sourceTimerange: { start: sourceStartUs, duration: durationUs },
             speed: 1,
-            volume: spec.volume ?? 1.0,
+            volume: normalizeVolume(spec.volume),
             extraMaterialRefs: [],
             speedId: this.registerSpeed(1),
         };
@@ -1608,26 +1621,69 @@ const SUBTITLE_DEFAULT_STYLE = {
 /** Vertical offset that places a text segment low on the canvas. */
 const SUBTITLE_TRANSFORM_Y = -0.8;
 /**
+ * Validates a volume value.
+ *
+ * The volume is written straight into the draft, so a value outside 0..1
+ * would make JianYing render the clip unpredictably.
+ */
+function normalizeVolume(volume) {
+    if (volume === undefined)
+        return 1.0;
+    if (!Number.isFinite(volume) || volume < 0 || volume > 1) {
+        throw new Error(`Invalid volume: ${volume} must be between 0 and 1.`);
+    }
+    return volume;
+}
+/**
  * Merges a partial style over a base style.
- * The stroke width is only defaulted when the caller supplies a stroke
- * without a width.
+ *
+ * The values are validated, because they are written straight into the draft:
+ * a colour with the wrong number of components, an alpha outside 0..1 or a
+ * negative size would make JianYing render the text unpredictably.
  */
 function normalizeStyle(partial, base) {
     const stroke = partial?.stroke;
+    const size = partial?.size ?? base.size;
+    if (!Number.isFinite(size) || size <= 0) {
+        throw new Error(`Invalid font size: ${size} must be greater than zero.`);
+    }
+    const alpha = partial?.alpha ?? base.alpha;
+    if (!Number.isFinite(alpha) || alpha < 0 || alpha > 1) {
+        throw new Error(`Invalid alpha: ${alpha} must be between 0 and 1.`);
+    }
+    const color = partial?.color ?? base.color;
+    if (!Array.isArray(color) || color.length !== 3) {
+        throw new Error(`Invalid colour: expected 3 components (RGB), got ${Array.isArray(color) ? color.length : typeof color}.`);
+    }
+    for (const channel of color) {
+        if (!Number.isFinite(channel) || channel < 0 || channel > 1) {
+            throw new Error(`Invalid colour component: ${channel} must be between 0 and 1.`);
+        }
+    }
+    const align = partial?.align ?? base.align;
+    if (align !== 0 && align !== 1 && align !== 2) {
+        throw new Error(`Invalid align: ${align} must be 0, 1 or 2.`);
+    }
+    let strokeColor = stroke?.color ?? base.stroke.color;
+    let strokeWidth = stroke?.width ?? base.stroke.width;
+    if (strokeWidth < 0 || !Number.isFinite(strokeWidth)) {
+        throw new Error(`Invalid stroke width: ${strokeWidth} must not be negative.`);
+    }
+    if (!Array.isArray(strokeColor) || strokeColor.length !== 3) {
+        throw new Error(`Invalid stroke colour: expected 3 components (RGB), got ${Array.isArray(strokeColor) ? strokeColor.length : typeof strokeColor}.`);
+    }
     return {
-        size: partial?.size ?? base.size,
+        size,
         bold: partial?.bold ?? base.bold,
         italic: partial?.italic ?? base.italic,
         underline: partial?.underline ?? base.underline,
-        color: partial?.color ?? base.color,
-        alpha: partial?.alpha ?? base.alpha,
-        align: partial?.align ?? base.align,
-        stroke: stroke
-            ? {
-                color: stroke.color ?? base.stroke.color,
-                width: stroke.width ?? base.stroke.width,
-            }
-            : base.stroke,
+        color: color,
+        alpha,
+        align,
+        stroke: {
+            color: strokeColor,
+            width: strokeWidth,
+        },
     };
 }
 /**
@@ -1715,7 +1771,10 @@ function sanitizeName(name) {
  * Key set mirrors the upstream draft_meta_info.json template exactly.
  */
 export function buildMetaInfo(name) {
-    const draftId = createHash("md5").update(name).digest("hex").toUpperCase();
+    // The reference template uses a dashed, UUID-shaped id derived from the
+    // draft name; a plain hex digest is a different shape.
+    const hex = createHash("md5").update(name).digest("hex").toUpperCase();
+    const draftId = `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
     return {
         cloud_package_completed_time: "",
         draft_cloud_capcut_purchase_info: "",
@@ -1731,7 +1790,7 @@ export function buildMetaInfo(name) {
             draft_enterprise_extra: "",
             draft_enterprise_id: "",
             draft_enterprise_name: "",
-            enterprise_material: null,
+            enterprise_material: [],
         },
         draft_fold_path: "",
         draft_id: draftId,
@@ -1741,10 +1800,15 @@ export function buildMetaInfo(name) {
         draft_is_article_video_draft: false,
         draft_is_from_deeplink: "false",
         draft_is_invisible: false,
+        // The reference template declares seven material types, not three.
         draft_materials: [
             { type: 0, value: [] },
             { type: 1, value: [] },
             { type: 2, value: [] },
+            { type: 3, value: [] },
+            { type: 6, value: [] },
+            { type: 7, value: [] },
+            { type: 8, value: [] },
         ],
         draft_materials_copied_info: [],
         draft_name: name,

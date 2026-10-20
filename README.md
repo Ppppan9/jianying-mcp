@@ -180,10 +180,11 @@ python3 scripts/compare_drafts.py \
 ```
 
 ```
-[1] verify.js            Result: 115 passed, 0 failed
+[1] verify.js            Result: 123 passed, 0 failed
 [2] diff_scenarios.js    Scenarios: 12 matched, 0 differed
 [3] compare_drafts.py    [A] Structural diff: 0 difference(s)
                          VERDICT: PASS
+[4] compare_meta_info.py VERDICT: MATCH (25 fields vs the reference template)
 ```
 
 Layer 2 is the important one: it drives the **underlying `pyJianYingDraft`
@@ -229,6 +230,15 @@ destroy the user's project. The draft is now read back into memory, edited
 and saved again without losing anything. The same review found that a single
 `maxChars: 0` argument drove the subtitle splitter into a loop that
 allocated 2.3 GB before V8 gave up.
+
+A final pass closed the remaining gaps: the draft registry entry now matches
+the reference template field for field (it had a different id shape, three
+material types instead of seven, and a null where the template has a list),
+the macOS draft location now includes the domestic build's container
+(`com.lemon.jianyingpro`), an animated GIF is no longer mistaken for a still
+image, and the numeric values written straight into the draft — colour
+components, alpha, font size, alignment, volume — are validated instead of
+being passed through unchecked.
 
 The full contract, including every rule now enforced, is in
 [`docs/DRAFT_FORMAT.md`](docs/DRAFT_FORMAT.md).
@@ -323,6 +333,7 @@ redistributed here.
 [2] diff_scenarios.js    Scenarios: 12 matched, 0 differed
 [3] compare_drafts.py    [A] Structural diff: 0 difference(s)
                          VERDICT: PASS
+[4] compare_meta_info.py VERDICT: MATCH (25 fields vs the reference template)
 ```
 
 第 2 层最关键：它驱动的是**底层 `pyJianYingDraft` 库**而不是上游 wrapper —— 因为 wrapper 会静默丢掉变速、音频淡入淡出和越界校验。覆盖静图、变速、源偏移、多轨道、淡入淡出、边界时长、文本与字幕样式、重叠、越界请求、素材移除。

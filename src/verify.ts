@@ -809,6 +809,60 @@ async function main() {
     maxCharsErr,
   );
 
+  // Style and volume values go straight into the draft, so an illegal one
+  // must be refused rather than written out.
+  const illegalStyles: Array<[string, Record<string, unknown>]> = [
+    ["a two-component colour", { color: [1, 0] }],
+    ["an out-of-range alpha", { alpha: 5 }],
+    ["a negative size", { size: -3 }],
+    ["an invalid alignment", { align: 7 }],
+  ];
+  for (const [label, style] of illegalStyles) {
+    let styleErr: string | null = null;
+    try {
+      await client.call("jianying_add_text", {
+        name: "Draft: v2", text: "样式校验", start: 20, duration: 1, track: 13, style,
+      });
+    } catch (e: any) {
+      styleErr = e.message;
+    }
+    check(`an illegal style is refused: ${label}`, styleErr !== null, styleErr);
+  }
+
+  let volumeErr: string | null = null;
+  try {
+    await client.call("jianying_add_video", {
+      name: "Draft: v2", filePath: vid1, start: 30, duration: 1, track: 14, volume: 42,
+    });
+  } catch (e: any) {
+    volumeErr = e.message;
+  }
+  check("an out-of-range volume is refused", volumeErr !== null && /volume/.test(volumeErr), volumeErr);
+
+  // The registry entry must match the reference template field for field.
+  await client.call("jianying_save_draft", { name: "Draft: v2" });
+  const registry = JSON.parse(
+    fs.readFileSync(path.join(DRAFTS_ROOT, "Draft_ v2", "draft_meta_info.json"), "utf8"),
+  );
+  check(
+    "the registry entry declares the reference's seven material types",
+    JSON.stringify(registry.draft_materials.map((m: any) => m.type)) ===
+      JSON.stringify([0, 1, 2, 3, 6, 7, 8]),
+    registry.draft_materials.map((m: any) => m.type),
+  );
+  check(
+    "the registry entry uses the reference's dashed id shape",
+    typeof registry.draft_id === "string" &&
+      registry.draft_id.length === 36 &&
+      registry.draft_id.split("-").length === 5,
+    registry.draft_id,
+  );
+  check(
+    "the registry entry's enterprise material is a list",
+    Array.isArray(registry.draft_enterprise_info.enterprise_material),
+    registry.draft_enterprise_info.enterprise_material,
+  );
+
   // Opening a draft must not leave an empty folder behind.
   const stray = path.join(DRAFTS_ROOT, "Never_Saved");
   await client.call("jianying_open_draft", { name: "Never_Saved" });
