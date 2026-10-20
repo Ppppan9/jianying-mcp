@@ -16,7 +16,8 @@
     "validate-plugin": "python3 scripts/validate_plugin.py plugin",
     "sync-plugin": "cp dist/server.js dist/draft.js plugin/server/ && cp skills/jianying-editor/SKILL.md plugin/skills/jianying-editor/SKILL.md",
     "guards": "node dist/guard_coverage.js",
-    "verify-drafts": "node dist/make_verify_drafts.js"
+    "verify-drafts": "node dist/make_verify_drafts.js",
+    "mutation": "node dist/mutation_check.js"
   },
   "keywords": [
     "jianying",

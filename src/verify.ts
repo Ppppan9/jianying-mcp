@@ -28,6 +28,11 @@ const DRAFTS_ROOT =
   process.argv[3] ?? path.join(REPO_ROOT, "out_drafts");
 const HAS_MEDIA = fs.existsSync(MEDIA_DIR) && fs.statSync(MEDIA_DIR).isDirectory();
 
+// Start from an empty output directory. A leftover draft from an earlier run
+// would make the checks about overwriting and cleaning up meaningless.
+fs.rmSync(DRAFTS_ROOT, { recursive: true, force: true });
+fs.mkdirSync(DRAFTS_ROOT, { recursive: true });
+
 let passed = 0;
 let failed = 0;
 const failures: string[] = [];
@@ -864,6 +869,189 @@ async function main() {
     registry.draft_enterprise_info.enterprise_material,
   );
 
+  // --- the written draft must match the contract, field by field -------
+  // These read the saved file rather than the in-memory state, so they catch
+  // a mistake in the serialization and not only in the model.
+  const contractName = "Contract";
+  await client.call("jianying_create_draft", {
+    name: contractName, width: 1080, height: 1920, fps: 30, overwrite: true,
+  });
+  await client.call("jianying_add_video", {
+    name: contractName, filePath: vid1, start: 0, duration: 4,
+  });
+  await client.call("jianying_add_audio", {
+    name: contractName, filePath: bgm, start: 0, track: 0, volume: 0.3,
+  });
+  await client.call("jianying_add_text", {
+    name: contractName, text: "契约校验", start: 0, duration: 2,
+    style: { alpha: 0.5 },
+  });
+  await client.call("jianying_save_draft", { name: contractName });
+  const contract = JSON.parse(
+    fs.readFileSync(path.join(DRAFTS_ROOT, contractName, "draft_info.json"), "utf8"),
+  );
+
+  // Every media segment must reference a speed material, and the material
+  // must exist in the speeds bucket.
+  const speedIds = new Set(
+    (contract.materials.speeds ?? []).map((m: any) => m.id),
+  );
+  const mediaSegments = contract.tracks
+    .filter((t: any) => t.type === "video" || t.type === "audio")
+    .flatMap((t: any) => t.segments ?? []);
+  check(
+    "every media segment references a speed material",
+    mediaSegments.length > 0 &&
+      mediaSegments.every((s: any) =>
+        (s.extra_material_refs ?? []).some((r: string) => speedIds.has(r)),
+      ),
+    mediaSegments.map((s: any) => s.extra_material_refs),
+  );
+  check(
+    "the speeds bucket holds one entry per media segment",
+    (contract.materials.speeds ?? []).length === mediaSegments.length,
+    {
+      speeds: (contract.materials.speeds ?? []).length,
+      segments: mediaSegments.length,
+    },
+  );
+
+  // The track attribute is the mute flag, not a track index.
+  check(
+    "the track attribute is the mute flag, not a track index",
+    contract.tracks.every((t: any) => t.attribute === 0),
+    contract.tracks.map((t: any) => t.attribute),
+  );
+  check(
+    "the segment track_attribute is the mute flag",
+    mediaSegments.every((s: any) => s.track_attribute === 0),
+    mediaSegments.map((s: any) => s.track_attribute),
+  );
+  check(
+    "the segment track_render_index is the track position",
+    mediaSegments.every((s: any) => s.track_render_index === 0),
+    mediaSegments.map((s: any) => s.track_render_index),
+  );
+
+  // The text opacity is carried once, in global_alpha.
+  const contractText = (contract.materials.texts ?? [])[0];
+  const textContent = contractText ? JSON.parse(contractText.content) : null;
+  check(
+    "the text fill alpha is fixed at 1",
+    textContent?.styles?.[0]?.fill?.alpha === 1.0,
+    textContent?.styles?.[0]?.fill?.alpha,
+  );
+  check(
+    "the text solid alpha is fixed at 1",
+    textContent?.styles?.[0]?.fill?.content?.solid?.alpha === 1.0,
+    textContent?.styles?.[0]?.fill?.content?.solid?.alpha,
+  );
+  check(
+    "the text opacity is carried once, in global_alpha",
+    contractText?.global_alpha === 0.5,
+    contractText?.global_alpha,
+  );
+
+  // A draft that is loaded and saved must not sweep the media bin, and the
+  // orphan sweep must only touch materials this engine created. The seeded
+  // draft carries a clip that is staged but not on the timeline.
+  const sweepName = "Sweep";
+  await client.call("jianying_create_draft", {
+    name: sweepName, width: 1920, height: 1080, overwrite: true,
+  });
+  await client.call("jianying_add_video", {
+    name: sweepName, filePath: vid1, start: 0, duration: 4,
+  });
+  await client.call("jianying_save_draft", { name: sweepName });
+  await client.call("jianying_close_draft", { name: sweepName });
+  await client.call("jianying_open_draft", { name: sweepName });
+  // A lookup that matches nothing must not remove anything.
+  const removedNothing = await client.call("jianying_remove_media", {
+    name: sweepName, filePath: path.join(DRAFTS_ROOT, "not_in_this_draft.mp4"),
+  });
+  check(
+    "removing a file that is not in the draft removes nothing",
+    removedNothing.ok === true && removedNothing.removedSegments === 0,
+    removedNothing,
+  );
+  await client.call("jianying_save_draft", { name: sweepName });
+  const swept = JSON.parse(
+    fs.readFileSync(path.join(DRAFTS_ROOT, sweepName, "draft_info.json"), "utf8"),
+  );
+  check(
+    "a failed lookup leaves the media bin alone",
+    (swept.materials.videos ?? []).length === 1,
+    (swept.materials.videos ?? []).length,
+  );
+  await client.call("jianying_close_draft", { name: sweepName });
+
+  // The track attribute is the mute flag, not a track index. The check needs
+  // more than one track, or a track index of zero would look the same.
+  const multiName = "Multi_Track";
+  await client.call("jianying_create_draft", {
+    name: multiName, width: 1920, height: 1080, overwrite: true,
+  });
+  await client.call("jianying_add_video", {
+    name: multiName, filePath: vid1, start: 0, duration: 2,
+  });
+  await client.call("jianying_add_video", {
+    name: multiName, filePath: vid2, start: 0, duration: 2, track: 1,
+  });
+  await client.call("jianying_add_audio", {
+    name: multiName, filePath: bgm, start: 0, track: 0, duration: 2,
+  });
+  await client.call("jianying_add_audio", {
+    name: multiName, filePath: bgm, start: 0, track: 1, duration: 2,
+  });
+  await client.call("jianying_save_draft", { name: multiName });
+  const multiTrackDraft = JSON.parse(
+    fs.readFileSync(path.join(DRAFTS_ROOT, multiName, "draft_info.json"), "utf8"),
+  );
+  check(
+    "every track keeps attribute at zero, whatever its index",
+    multiTrackDraft.tracks.length === 4 &&
+      multiTrackDraft.tracks.every((t: any) => t.attribute === 0),
+    multiTrackDraft.tracks.map((t: any) => ({ type: t.type, attribute: t.attribute })),
+  );
+  check(
+    "the track render index advances with the track index",
+    multiTrackDraft.tracks
+      .filter((t: any) => t.type === "video")
+      .map((t: any) => t.segments[0].render_index)
+      .join(",") === "0,1",
+    multiTrackDraft.tracks
+      .filter((t: any) => t.type === "video")
+      .map((t: any) => t.segments[0].render_index),
+  );
+  await client.call("jianying_close_draft", { name: multiName });
+
+  // A draft whose name needs sanitising must still be addressable with the
+  // name the caller used.
+  const messyName = "My: Draft/2";
+  await client.call("jianying_create_draft", {
+    name: messyName, width: 1920, height: 1080, overwrite: true,
+  });
+  await client.call("jianying_add_text", {
+    name: messyName, text: "寻址测试", start: 0, duration: 1,
+  });
+  await client.call("jianying_save_draft", { name: messyName });
+  const addressed2 = await client.call("jianying_inspect_draft", { name: messyName });
+  check(
+    "a draft with a sanitised name is addressable with the original name",
+    addressed2.ok === true,
+    addressed2,
+  );
+  const messyText = addressed2.draft.tracks
+    .filter((t: any) => t.type === "text")
+    .flatMap((t: any) => t.segments ?? [])
+    .map((s: any) => s.text);
+  check(
+    "the addressed draft is the one that was created",
+    messyText.includes("寻址测试"),
+    messyText,
+  );
+  await client.call("jianying_close_draft", { name: messyName });
+
   // --- loading a draft must not lose anything ---------------------------
   // A draft seeded with material this engine does not model — effects,
   // stickers, transitions and a media bin — must keep all of it when it is
@@ -928,6 +1116,15 @@ async function main() {
     (seededAfter.materials.videos ?? []).length,
   );
   check(
+    "loading and saving keeps a material that no segment references",
+    // The seed carries a clip that is staged but not on the timeline. The
+    // orphan sweep must not touch it, because it did not create it.
+    (seededAfter.materials.videos ?? []).some(
+      (m: any) => m.id === "video-unused",
+    ),
+    (seededAfter.materials.videos ?? []).map((m: any) => m.id),
+  );
+  check(
     "loading and saving keeps a photo in the images bucket",
     (seededAfter.materials.images ?? []).length === 1 &&
       (seededAfter.materials.images ?? [])[0]?.type === "photo",
@@ -988,6 +1185,75 @@ async function main() {
     (afterRemove.materials.videos ?? []).length,
   );
   await client.call("jianying_close_draft", { name: "Seeded" });
+
+  // The same must hold for a loaded draft that holds a clip which is staged
+  // but not on the timeline: a failed lookup must not sweep it away.
+  const seededSweep = "Seeded_Sweep";
+  fs.cpSync(path.join(DRAFTS_ROOT, "Seeded"), path.join(DRAFTS_ROOT, seededSweep), {
+    recursive: true,
+  });
+  await client.call("jianying_open_draft", { name: seededSweep });
+  const seededRemoved = await client.call("jianying_remove_media", {
+    name: seededSweep, filePath: path.join(DRAFTS_ROOT, "not_in_this_draft.mp4"),
+  });
+  check(
+    "a failed lookup in a loaded draft removes nothing",
+    seededRemoved.ok === true && seededRemoved.removedSegments === 0,
+    seededRemoved,
+  );
+  await client.call("jianying_save_draft", { name: seededSweep });
+  const seededSwept = JSON.parse(
+    fs.readFileSync(path.join(DRAFTS_ROOT, seededSweep, "draft_info.json"), "utf8"),
+  );
+  check(
+    "a failed lookup in a loaded draft leaves its media bin alone",
+    (seededSwept.materials.videos ?? []).length === 2,
+    (seededSwept.materials.videos ?? []).length,
+  );
+  check(
+    "a failed lookup in a loaded draft keeps the unreferenced clip",
+    (seededSwept.materials.videos ?? []).some((m: any) => m.id === "video-unused"),
+    (seededSwept.materials.videos ?? []).map((m: any) => m.id),
+  );
+  await client.call("jianying_close_draft", { name: seededSweep });
+
+  // Removing a material that *is* in a loaded draft runs the orphan sweep.
+  // The sweep must leave the clips the engine did not create alone.
+  const sweepRemove = "Seeded_Remove";
+  fs.cpSync(path.join(DRAFTS_ROOT, "Seeded"), path.join(DRAFTS_ROOT, sweepRemove), {
+    recursive: true,
+  });
+  await client.call("jianying_open_draft", { name: sweepRemove });
+  // The staged copy of the clip on the timeline is named after the md5 of its
+  // source path, so the source path is what the caller has to pass.
+  const seededInfo = JSON.parse(
+    fs.readFileSync(path.join(DRAFTS_ROOT, sweepRemove, "draft_info.json"), "utf8"),
+  );
+  const onTimeline = (seededInfo.materials.videos ?? []).find(
+    (m: any) => m.id === "video-on-timeline",
+  );
+  const onTimelinePath = String(onTimeline?.path ?? "");
+  const removedReal = await client.call("jianying_remove_media", {
+    name: sweepRemove, filePath: onTimelinePath,
+  });
+  check(
+    "removing a material that is in the draft works",
+    removedReal.ok === true && removedReal.removedSegments === 1,
+    removedReal,
+  );
+  await client.call("jianying_save_draft", { name: sweepRemove });
+  const afterSweepRemove = JSON.parse(
+    fs.readFileSync(path.join(DRAFTS_ROOT, sweepRemove, "draft_info.json"), "utf8"),
+  );
+  check(
+    "the orphan sweep leaves the clips it did not create alone",
+    (afterSweepRemove.materials.videos ?? []).some(
+      (m: any) => m.id === "video-unused",
+    ),
+    (afterSweepRemove.materials.videos ?? []).map((m: any) => m.id),
+  );
+  await client.call("jianying_close_draft", { name: sweepRemove });
+
 
   // Adding a file that a loaded draft already holds must reuse its material
   // rather than creating a duplicate.

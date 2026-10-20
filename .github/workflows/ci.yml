@@ -47,6 +47,32 @@ jobs:
       - name: Check that the Plugin Skill matches the source Skill
         run: diff -u skills/jianying-editor/SKILL.md plugin/skills/jianying-editor/SKILL.md
 
+  # The mutation job deliberately breaks the engine and checks that the
+  # suite notices. It is a separate job because it rewrites the source
+  # while it runs, and it restores the tree before it finishes.
+  mutation:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Generate synthetic test media
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg
+          bash scripts/make_test_media.sh
+
+      - name: Mutation check — the suite must notice every deliberate break
+        run: node dist/mutation_check.js ./test-media
+
+      - name: Confirm the source tree was restored
+        run: git diff --exit-code
+
   differential:
     runs-on: ubuntu-latest
     steps:
