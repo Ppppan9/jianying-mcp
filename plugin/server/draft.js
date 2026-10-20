@@ -134,8 +134,15 @@ export function formatSrtTime(seconds) {
 /**
  * Splits a script into subtitle chunks of at most `maxChars` characters,
  * preferring punctuation boundaries. Mirrors the upstream "每 18 字一行" rule.
+ *
+ * `maxChars` must be a positive number. A non-positive limit has no sensible
+ * meaning and would make the split loop forever, so it is rejected here.
  */
 export function splitSubtitleLines(script, maxChars = 18) {
+    if (!Number.isFinite(maxChars) || maxChars < 1) {
+        throw new Error(`Invalid maxChars: ${maxChars} must be a number of at least 1.`);
+    }
+    const limit = Math.trunc(maxChars);
     const paragraphs = script
         .split(/\n+/)
         .map((p) => p.trim())
@@ -147,9 +154,9 @@ export function splitSubtitleLines(script, maxChars = 18) {
         for (const token of tokens) {
             // A token longer than the limit is split further, so a run-on sentence
             // without punctuation still produces readable lines.
-            const pieces = token.length > maxChars ? hardSplit(token, maxChars) : [token];
+            const pieces = token.length > limit ? hardSplit(token, limit) : [token];
             for (const piece of pieces) {
-                if (current.length + piece.length <= maxChars) {
+                if (current.length + piece.length <= limit) {
                     current += piece;
                 }
                 else {
@@ -172,12 +179,16 @@ export function splitSubtitleLines(script, maxChars = 18) {
  */
 function hardSplit(text, maxChars) {
     const out = [];
+    // A non-positive limit would make the loop below never advance: the slice
+    // would be empty and the same text would be cut forever. A limit below 1
+    // is treated as 1, and the caller validates the range separately.
+    const limit = Math.max(1, Math.trunc(maxChars));
     let rest = text;
-    while (rest.length > maxChars) {
-        let cut = maxChars;
+    while (rest.length > limit) {
+        let cut = limit;
         // Prefer breaking at a space so words stay intact.
-        const space = rest.lastIndexOf(" ", maxChars);
-        if (space > maxChars * 0.5)
+        const space = rest.lastIndexOf(" ", limit);
+        if (space > limit * 0.5)
             cut = space + 1;
         out.push(rest.slice(0, cut).trimEnd());
         rest = rest.slice(cut);
@@ -468,6 +479,7 @@ export class Draft {
     name;
     width;
     height;
+    /** Frame rate, restored from the draft when one is loaded. */
     fps;
     root;
     dir;
@@ -508,6 +520,10 @@ export class Draft {
             options.width !== undefined || options.height !== undefined;
         this.canvasWidth = this.width;
         this.canvasHeight = this.height;
+        if (options.load) {
+            this.loadExisting();
+            return;
+        }
         if (fs.existsSync(this.dir)) {
             if (!options.overwrite) {
                 throw new Error(`Draft "${this.name}" already exists at ${this.dir}. Pass overwrite=true to replace it.`);
@@ -521,7 +537,137 @@ export class Draft {
             }
             fs.rmSync(this.dir, { recursive: true, force: true });
         }
-        fs.mkdirSync(this.materialsDir, { recursive: true });
+        // The directory is created when the draft is saved, not here: creating it
+        // now would leave an empty folder in the user's real project list for
+        // every draft that was opened and never edited.
+    }
+    /**
+     * Reads an existing draft back into memory so it can be edited and saved.
+     *
+     * Only the parts this engine writes are restored: the tracks with their
+     * segments, and the materials those segments reference. Anything else in
+     * the file (effects, keyframes, stickers) is preserved on disk but not
+     * modelled, and is therefore left untouched when the draft is saved.
+     */
+    loadExisting() {
+        const infoPath = path.join(this.dir, "draft_info.json");
+        if (!fs.existsSync(infoPath)) {
+            throw new Error(`Cannot open "${this.name}": no draft_info.json in ${this.dir}. ` +
+                `Use jianying_create_draft to make a new draft.`);
+        }
+        let info;
+        try {
+            info = JSON.parse(fs.readFileSync(infoPath, "utf8"));
+        }
+        catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            throw new Error(`Cannot open "${this.name}": ${this.dir}/draft_info.json is not valid JSON (${message}).`);
+        }
+        this.fps = typeof info.fps === "number" ? info.fps : this.fps;
+        if (info.canvas_config) {
+            this.canvasWidth = Number(info.canvas_config.width) || this.canvasWidth;
+            this.canvasHeight = Number(info.canvas_config.height) || this.canvasHeight;
+        }
+        this.explicitResolution = true;
+        this.resolutionResolved = true;
+        // Restore the materials this engine understands, keyed by their id.
+        const materials = info.materials ?? {};
+        const buckets = [
+            ["video", "videos"],
+            ["photo", "images"],
+            ["audio", "audios"],
+            ["text", "texts"],
+            ["speed", "speeds"],
+            ["audio_fade", "audio_fades"],
+        ];
+        for (const [kind, bucket] of buckets) {
+            for (const material of materials[bucket] ?? []) {
+                if (!material || typeof material.id !== "string")
+                    continue;
+                this.addMaterial({ id: material.id, kind, data: material });
+                // A media material that was staged in this draft is registered under
+                // its staged path, so it can be found again by the original file.
+                if (kind === "video" || kind === "photo" || kind === "audio") {
+                    const stagedPath = String(material.path ?? "");
+                    if (stagedPath) {
+                        const cacheKey = `${kind}\u0000${stagedPath}`;
+                        this.stagedMedia.set(cacheKey, {
+                            materialId: material.id,
+                            stagedName: path.basename(stagedPath),
+                        });
+                    }
+                }
+            }
+        }
+        // Restore the tracks with their segments.
+        const perTypeCounter = {};
+        for (const track of info.tracks ?? []) {
+            const type = track.type;
+            if (type !== "video" && type !== "audio" && type !== "text")
+                continue;
+            const renderIndex = Number(track.segments?.[0]?.render_index ?? 0);
+            const base = TRACK_BASE_RENDER_INDEX[type];
+            const relative = Math.max(0, Math.trunc(renderIndex - base));
+            // Two tracks of the same type may share a render index; fall back to a
+            // counter so each keeps its own identity.
+            const key = `${type}:${relative}`;
+            const index = perTypeCounter[key] ?? relative;
+            perTypeCounter[key] = index + 1;
+            const state = {
+                id: String(track.id ?? randomUUID().replace(/-/g, "")),
+                type,
+                index,
+                segments: [],
+                renderIndex,
+                name: String(track.name ?? DEFAULT_TRACK_NAMES[type]),
+            };
+            for (const raw of track.segments ?? []) {
+                const materialId = String(raw.material_id ?? "");
+                const material = this.materials.get(materialId);
+                if (!material)
+                    continue;
+                const speedId = (raw.extra_material_refs ?? []).find((ref) => this.materials.get(ref)?.data?.type === "speed");
+                const segment = {
+                    id: String(raw.id ?? randomUUID().replace(/-/g, "")),
+                    materialId,
+                    targetTimerange: {
+                        start: Number(raw.target_timerange?.start ?? 0),
+                        duration: Number(raw.target_timerange?.duration ?? 0),
+                    },
+                    sourceTimerange: raw.source_timerange
+                        ? {
+                            start: Number(raw.source_timerange.start ?? 0),
+                            duration: Number(raw.source_timerange.duration ?? 0),
+                        }
+                        : null,
+                    speed: Number(raw.speed ?? 1),
+                    volume: Number(raw.volume ?? 1),
+                    extraMaterialRefs: (raw.extra_material_refs ?? []).filter((ref) => this.materials.get(ref)?.data?.type === "audio_fade"),
+                    clip: raw.clip
+                        ? {
+                            transform: {
+                                x: Number(raw.clip.transform?.x ?? 0),
+                                y: Number(raw.clip.transform?.y ?? 0),
+                            },
+                            scale: {
+                                x: Number(raw.clip.scale?.x ?? 1),
+                                y: Number(raw.clip.scale?.y ?? 1),
+                            },
+                            rotation: Number(raw.clip.rotation ?? 0),
+                            alpha: Number(raw.clip.alpha ?? 1),
+                            flip: {
+                                horizontal: Boolean(raw.clip.flip?.horizontal),
+                                vertical: Boolean(raw.clip.flip?.vertical),
+                            },
+                        }
+                        : undefined,
+                    speedId,
+                };
+                state.segments.push(segment);
+            }
+            this.tracks.push(state);
+        }
+        this.tracks.sort((a, b) => a.renderIndex - b.renderIndex);
     }
     // -- track helpers ------------------------------------------------------
     /**
@@ -629,6 +775,7 @@ export class Draft {
         const ext = path.extname(abs) || (kind === "audio" ? ".mp3" : ".mp4");
         const stagedName = `${md5}${ext}`;
         const stagedPath = path.join(this.materialsDir, stagedName);
+        fs.mkdirSync(this.materialsDir, { recursive: true });
         fs.copyFileSync(abs, stagedPath);
         const materialId = randomUUID().replace(/-/g, "");
         this.stagedMedia.set(cacheKey, { materialId, stagedName });
@@ -1379,6 +1526,7 @@ export class Draft {
     /** Writes the complete draft directory to disk. */
     save() {
         const written = [];
+        fs.mkdirSync(this.dir, { recursive: true });
         const write = (name, content) => {
             const p = path.join(this.dir, name);
             fs.writeFileSync(p, content, "utf8");

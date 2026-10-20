@@ -726,6 +726,99 @@ async function main() {
     srt2.slice(0, 200),
   );
 
+  // --- opening an existing draft must resume it, not destroy it ---------
+  const resumeName = "Resume_Me";
+  await client.call("jianying_create_draft", {
+    name: resumeName, width: 1920, height: 1080, overwrite: true,
+  });
+  await client.call("jianying_add_video", {
+    name: resumeName, filePath: vid1, start: 0, duration: 4,
+  });
+  await client.call("jianying_add_text", {
+    name: resumeName, text: "要续编的字幕", start: 1, duration: 2,
+  });
+  await client.call("jianying_save_draft", { name: resumeName });
+  await client.call("jianying_close_draft", { name: resumeName });
+
+  const resumeDir = path.join(DRAFTS_ROOT, resumeName);
+  const beforeResume = fs.readdirSync(resumeDir).sort();
+  const infoBefore = fs.readFileSync(
+    path.join(resumeDir, "draft_info.json"),
+    "utf8",
+  );
+
+  const resumed = await client.call("jianying_open_draft", { name: resumeName });
+  check("an existing draft can be opened", resumed.ok === true, resumed);
+  const resumedText = resumed.draft.tracks
+    .filter((t: any) => t.type === "text")
+    .flatMap((t: any) => t.segments ?? [])
+    .map((s: any) => s.text);
+  check(
+    "the opened draft keeps its timeline",
+    resumedText.includes("要续编的字幕"),
+    resumedText,
+  );
+  check(
+    "the opened draft keeps its video clips",
+    resumed.draft.tracks
+      .filter((t: any) => t.type === "video")
+      .reduce((n: number, t: any) => n + t.segmentCount, 0) === 1,
+  );
+
+  // Editing and saving the resumed draft must not lose the earlier work.
+  await client.call("jianying_add_text", {
+    name: resumeName, text: "续编新增", start: 6, duration: 2,
+  });
+  await client.call("jianying_save_draft", { name: resumeName });
+  const afterResume = fs.readdirSync(resumeDir).sort();
+  check(
+    "opening and saving a draft keeps every file",
+    JSON.stringify(afterResume) === JSON.stringify(beforeResume),
+    { before: beforeResume, after: afterResume },
+  );
+  const infoAfter = JSON.parse(
+    fs.readFileSync(path.join(resumeDir, "draft_info.json"), "utf8"),
+  );
+  const textsAfter = infoAfter.materials.texts.map((m: any) =>
+    JSON.parse(m.content).text,
+  );
+  check(
+    "the resumed draft keeps the original caption and gains the new one",
+    textsAfter.includes("要续编的字幕") && textsAfter.includes("续编新增"),
+    textsAfter,
+  );
+  check(
+    "the resumed draft still has its video clip",
+    infoAfter.materials.videos.length === 1,
+    infoAfter.materials.videos.length,
+  );
+  await client.call("jianying_close_draft", { name: resumeName });
+
+  // A malformed subtitle limit must be refused, not loop forever.
+  let maxCharsErr: string | null = null;
+  try {
+    await client.call("jianying_add_subtitles", {
+      name: "Draft: v2", script: "abc", start: 0, duration: 2, maxChars: 0,
+    });
+  } catch (e: any) {
+    maxCharsErr = e.message;
+  }
+  check(
+    "a non-positive maxChars is refused",
+    maxCharsErr !== null && /maxChars/.test(maxCharsErr),
+    maxCharsErr,
+  );
+
+  // Opening a draft must not leave an empty folder behind.
+  const stray = path.join(DRAFTS_ROOT, "Never_Saved");
+  await client.call("jianying_open_draft", { name: "Never_Saved" });
+  await client.call("jianying_close_draft", { name: "Never_Saved" });
+  check(
+    "a draft that was never saved leaves no folder behind",
+    !fs.existsSync(stray),
+    stray,
+  );
+
   client.close();
 
   console.log(`\n\x1b[1mResult: ${passed} passed, ${failed} failed\x1b[0m`);

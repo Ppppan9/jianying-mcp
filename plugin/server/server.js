@@ -131,25 +131,36 @@ const textStyleProperties = {
 const TOOLS = [
     {
         name: "jianying_open_draft",
-        description: "Open (or create) a JianYing draft by name and return its timeline structure. Use this to resume work on an existing draft, or to inspect drafts listed by jianying_list_drafts.",
-        inputSchema: S.object("Open a JianYing draft", {
+        description: "Open an existing JianYing draft by name and return its timeline structure, so work can be resumed. Use this to inspect or continue a draft listed by jianying_list_drafts. Pass overwrite only to deliberately discard the existing draft and start over.",
+        inputSchema: S.object("Open an existing JianYing draft", {
             name: S.string("Draft name (the folder name inside the drafts root)"),
             draftsRoot: S.string("Override the drafts root directory"),
-            overwrite: S.boolean("Replace the draft if it already exists"),
-            width: S.number("Canvas width (default 1920)"),
-            height: S.number("Canvas height (default 1080)"),
-            fps: S.number("Frame rate (default 30)"),
+            overwrite: S.boolean("Discard the existing draft and start an empty one. This deletes it — omit it to resume editing."),
         }, ["name"]),
         handler: (args) => {
             // Refuse before touching the filesystem.
             assertNameAvailable(args.name);
+            const root = resolveDraftsRoot(args.draftsRoot);
+            const existing = path.join(root, sanitizeDraftName(args.name));
+            if (args.overwrite) {
+                const draft = new Draft({
+                    name: args.name,
+                    draftsRoot: root,
+                    overwrite: true,
+                });
+                registerSession(draft);
+                return {
+                    ok: true,
+                    replaced: true,
+                    draft: draft.summary(),
+                    note: "The previous draft was discarded and an empty one created.",
+                };
+            }
+            // Resume an existing draft when there is one; otherwise make a new one.
             const draft = new Draft({
                 name: args.name,
-                width: args.width,
-                height: args.height,
-                fps: args.fps,
-                draftsRoot: resolveDraftsRoot(args.draftsRoot),
-                overwrite: args.overwrite ?? false,
+                draftsRoot: root,
+                load: fs.existsSync(path.join(existing, "draft_info.json")),
             });
             registerSession(draft);
             return { ok: true, draft: draft.summary() };

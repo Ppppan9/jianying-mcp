@@ -10,6 +10,8 @@ dist/
 # Test and comparison artifacts
 compare_drafts/
 diff_scenarios/
+diff_mi/
+diff_scenarios_mediainfo/
 out_drafts/
 verify_drafts*/
 final_verify/
