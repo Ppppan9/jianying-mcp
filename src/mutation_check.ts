@@ -211,6 +211,7 @@ async function main() {
 
   let caught = 0;
   const survivors: string[] = [];
+  const skipped: string[] = [];
 
   const serverSrc = path.join(REPO, "src", "server.ts");
   const serverOriginal = fs.readFileSync(serverSrc, "utf8");
@@ -228,8 +229,12 @@ async function main() {
     const target = source.path;
     const base = source.original;
     if (!base.includes(mutation.from)) {
+      // A mutation whose snippet no longer matches the source is not a
+      // passing check — it is a check that never ran. It has to be fixed
+      // along with the code it watches.
+      skipped.push(mutation.name);
       console.log(
-        `  \x1b[33m?\x1b[0m ${mutation.name} — the snippet no longer matches, skipping`,
+        `  \x1b[31m✗\x1b[0m ${mutation.name} — the snippet no longer matches the source`,
       );
       continue;
     }
@@ -262,15 +267,21 @@ async function main() {
   build();
   fs.rmSync(scratch, { recursive: true, force: true });
 
-  const total = caught + survivors.length;
+  const total = caught + survivors.length + skipped.length;
   console.log(
     `\n\x1b[1mMutations: ${caught} of ${total} caught, ${survivors.length} survived\x1b[0m`,
   );
   if (survivors.length) {
     console.log("\nSurvived — these behaviours are not covered:");
     for (const s of survivors) console.log(`  - ${s}`);
-    process.exit(1);
   }
+  if (skipped.length) {
+    console.log(
+      "\nSkipped — the source moved and these checks no longer run:",
+    );
+    for (const s of skipped) console.log(`  - ${s}`);
+  }
+  if (survivors.length || skipped.length) process.exit(1);
   process.exit(0);
 }
 

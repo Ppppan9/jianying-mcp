@@ -84,6 +84,12 @@ jobs:
           sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg
           bash scripts/make_test_media.sh
 
+      # The mutation job rewrites the source while it runs, so it needs its
+      # own build. `dist/` is not committed, so without this the script has
+      # nothing to run.
+      - name: Build
+        run: npm run build
+
       - name: Mutation check — the suite must notice every deliberate break
         run: node dist/mutation_check.js ./test-media
 
