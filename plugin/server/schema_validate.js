@@ -13,6 +13,7 @@
  * Both are silent wrong answers, so the arguments are checked here, before
  * the tool touches anything.
  */
+import { DURATION_STRING_PATTERN } from "./draft.js";
 /**
  * Validates a value against the JSON Schema subset this server uses.
  *
@@ -44,6 +45,13 @@ export function validateAgainstSchema(schema, value, path = "") {
         case "string":
             if (typeof value !== "string") {
                 errors.push(`${label(path)} must be a string, got ${describe(value)}`);
+                break;
+            }
+            // A duration string has to be a duration all the way through. The
+            // engine adds up the number-and-unit groups it finds and ignores the
+            // rest, so "1m30s oops" would silently become 90 seconds.
+            if (schema.durationString && !DURATION_STRING_PATTERN.test(value)) {
+                errors.push(`${label(path)} must be a duration such as "1m30s", "90s" or "500ms", got "${value}"`);
             }
             break;
         case "number":

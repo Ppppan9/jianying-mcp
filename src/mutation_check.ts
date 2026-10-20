@@ -162,6 +162,28 @@ const MUTATIONS: Array<{ name: string; from: string; to: string; file?: string }
     to: "    const values = [JSON.parse(line)]; const failures = 0;",
     file: "server.ts",
   },
+  {
+    // The primitive branch must stop at the end of the token. Taking the
+    // rest of the line swallows the request that follows a fragment.
+    name: "a fragment swallows the request behind it",
+    from: "    const chunk = line.slice(index, end);\n    index = end;",
+    to: "    const chunk = line.slice(index).trim();\n    index = line.length;",
+    file: "server.ts",
+  },
+  {
+    // The engine adds up the number-and-unit groups it finds and ignores
+    // the rest, so "1m30s oops" has to be refused before it gets there.
+    name: "a duration string with rubbish in it is accepted",
+    from: "      if (schema.durationString && !DURATION_STRING_PATTERN.test(value)) {",
+    to: "      if (false) {",
+    file: "schema_validate.ts",
+  },
+  {
+    name: "the subtitle flag is refused",
+    from: "      subtitle: S.boolean(",
+    to: "      subtitle: S.number(",
+    file: "server.ts",
+  },
 ];
 
 function run(cmd: string, args: string[], env: NodeJS.ProcessEnv = {}): boolean {

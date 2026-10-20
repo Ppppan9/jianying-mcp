@@ -121,7 +121,7 @@ function expect(
 function isErrorResult(messages: any[]): string | null {
   const result = messages[0]?.result;
   if (!result || result.isError !== true) {
-    return `expected a tool error, got ${JSON.stringify(messages[0]).slice(0, 220)}`;
+    return `expected a tool error, got ${show(messages[0]).slice(0, 220)}`;
   }
   const text = String(result.content?.[0]?.text ?? "");
   if (!text.startsWith("Invalid arguments")) {
@@ -130,10 +130,34 @@ function isErrorResult(messages: any[]): string | null {
   return null;
 }
 
+/**
+ * Finds the answer to a request by its id.
+ *
+ * The replies are correlated by id, not by position: the handlers run
+ * concurrently, so a refused call can answer before a slower call that was
+ * sent first. A client that reads the replies in order would apply the
+ * wrong result to the wrong request.
+ */
+function byId(messages: any[], id: number): any {
+  return messages.find((m) => m?.id === id);
+}
+
+/**
+ * Renders a value for an error message.
+ *
+ * `JSON.stringify(undefined)` is undefined, not a string, so a missing
+ * answer has to be handled — otherwise the suite crashes while reporting a
+ * failure, which is exactly when it is least useful.
+ */
+function show(value: unknown): string {
+  const text = JSON.stringify(value);
+  return text === undefined ? String(value) : text;
+}
+
 function errorCode(code: number) {
   return (messages: any[]) => {
     const error = messages[0]?.error;
-    if (!error) return `expected an error, got ${JSON.stringify(messages[0]).slice(0, 200)}`;
+    if (!error) return `expected an error, got ${show(messages[0]).slice(0, 200)}`;
     if (error.code !== code) return `expected error ${code}, got ${error.code} (${error.message})`;
     return null;
   };
@@ -217,8 +241,17 @@ async function main() {
 
   // --- notifications stay silent ------------------------------------------
   {
-    const r = await exchange('{"jsonrpc":"2.0","method":"ping"}\n');
-    expect("a notification gets no answer", r, 0);
+    // A notification on its own line proves nothing: a dead server also
+    // produces no reply. A notification followed by a request on the same
+    // line proves the notification is silent *and* the server is alive.
+    const r = await exchange(
+      '{"jsonrpc":"2.0","method":"ping"}{"jsonrpc":"2.0","id":42,"method":"ping"}\n',
+    );
+    expect("a notification gets no answer", r, 1, (m) =>
+      m[0]?.id === 42 && m[0]?.result
+        ? null
+        : `expected only the request's answer, got ${show(m).slice(0, 200)}`,
+    );
   }
 
   // --- framing ------------------------------------------------------------
@@ -229,7 +262,7 @@ async function main() {
     expect("two messages on one line are both answered", r, 2, (m) =>
       m.length === 2 && m[0].id === 1 && m[1].id === 2
         ? null
-        : `unexpected replies: ${JSON.stringify(m).slice(0, 200)}`,
+        : `unexpected replies: ${show(m).slice(0, 200)}`,
     );
   }
   {
@@ -237,7 +270,7 @@ async function main() {
       '[{"jsonrpc":"2.0","method":"ping"},{"jsonrpc":"2.0","id":7,"method":"ping"}]\n',
     );
     expect("a batch answers only its request", r, 1, (m) =>
-      m[0]?.id === 7 ? null : `unexpected replies: ${JSON.stringify(m).slice(0, 200)}`,
+      m[0]?.id === 7 ? null : `unexpected replies: ${show(m).slice(0, 200)}`,
     );
   }
 
@@ -326,19 +359,45 @@ async function main() {
     // A valid call must still work after the validation was added.
     expect("a valid call still goes through", r, 1, (m) =>
       m[0]?.result?.isError
-        ? `valid call was refused: ${JSON.stringify(m[0]).slice(0, 220)}`
+        ? `valid call was refused: ${show(m[0]).slice(0, 220)}`
         : null,
     );
   }
+  {
+    // The same server, so the open draft is still open: the save has to
+    // produce a directory on disk, or the check below would pass against a
+    // server that writes nothing at all.
+    const payload =
+      request("jianying_open_draft", "", { name: "NestedStyle" }, { draftsRoot }) +
+      "\n" +
+      request("jianying_save_draft", "", { name: "NestedStyle" }) +
+      "\n";
+    const r = await exchange(payload);
+    expect("a valid draft can be saved", r, 2, (m) => {
+      const save = byId(m, 1);
+      if (!save) return "no answer for the save";
+      return save.result?.isError
+        ? `the save was refused: ${show(save).slice(0, 220)}`
+        : null;
+    });
+  }
 
-  // Nothing may be written to the drafts root by a refused call.
+  // Nothing may be written to the drafts root by a refused call — and a
+  // call that is accepted must write something, or the check above would
+  // pass against a server that does nothing at all.
   {
     const leftovers = fs.readdirSync(draftsRoot);
     const bad2 = leftovers.filter(
       (n) => n === "undefined" || n === "123" || n === "a,b" || n.startsWith("Pollute"),
     );
+    const accepted = leftovers.includes("NestedStyle");
     if (bad2.length > 0) {
       bad("a refused call writes nothing to disk", `left behind: ${bad2.join(", ")}`);
+    } else if (!accepted) {
+      bad(
+        "a refused call writes nothing to disk",
+        "the accepted call wrote nothing either, so the check proves nothing",
+      );
     } else {
       ok("a refused call writes nothing to disk");
     }
@@ -407,7 +466,7 @@ async function main() {
       } else if (!add || add.result?.isError) {
         bad(
           "an in-flight call survives the peer closing the pipe",
-          `the call was cut off: ${JSON.stringify(add).slice(0, 200)}`,
+          `the call was cut off: ${show(add).slice(0, 200)}`,
         );
       } else {
         ok("an in-flight call survives the peer closing the pipe");
@@ -416,18 +475,116 @@ async function main() {
     }
   }
 
+  // --- duration strings and the subtitle flag ----------------------------
+  {
+    // The engine adds up the number-and-unit groups it finds and ignores
+    // the rest, so "1m30s oops" would silently become 90 seconds.
+    const payload =
+      request("jianying_open_draft", "", { name: "Durations" }, { draftsRoot }) +
+      "\n" +
+      request("jianying_add_text", "", {
+        name: "Durations",
+        text: "caption",
+        start: 0,
+        duration: "1m30s oops",
+      }) +
+      "\n";
+    const r = await exchange(payload);
+    expect("a duration string with rubbish in it is refused", r, 2, (m) => {
+      const add = byId(m, 1);
+      if (!add) return "no answer for the text call";
+      return add.result?.isError ? null : `the duration was accepted: ${show(add).slice(0, 200)}`;
+    });
+  }
+  {
+    const payload =
+      request("jianying_open_draft", "", { name: "Durations2" }, { draftsRoot }) +
+      "\n" +
+      request("jianying_add_text", "", {
+        name: "Durations2",
+        text: "caption",
+        start: 0,
+        duration: "1m30s",
+      }) +
+      "\n";
+    const r = await exchange(payload);
+    expect("a duration string is accepted", r, 2, (m) => {
+      const add = byId(m, 1);
+      if (!add) return "no answer for the text call";
+      return add.result?.isError
+        ? `the duration was refused: ${show(add).slice(0, 200)}`
+        : null;
+    });
+  }
+  {
+    // The engine has a caption style of its own, and the flag reaches it.
+    const payload =
+      request("jianying_open_draft", "", { name: "Caption" }, { draftsRoot }) +
+      "\n" +
+      request("jianying_add_text", "", {
+        name: "Caption",
+        text: "caption",
+        start: 0,
+        duration: 2,
+        subtitle: true,
+      }) +
+      "\n";
+    const r = await exchange(payload);
+    expect("the subtitle flag is accepted", r, 2, (m) => {
+      const add = byId(m, 1);
+      if (!add) return "no answer for the text call";
+      return add.result?.isError
+        ? `the subtitle flag was refused: ${show(add).slice(0, 200)}`
+        : null;
+    });
+  }
+
   // --- a large single line must not wedge the server -----------------------
   {
     const huge = "x".repeat(17 * 1024 * 1024);
     const r = await exchange(huge + "\n", { waitMs: 8000 });
     if (r.exitCode === 1) {
-      ok("an oversized line ends the connection instead of buffering forever");
+      // Exit code 1 alone is not enough: any fatal error exits 1. The log
+      // has to name the reason, or the check cannot tell the cap from a
+      // crash.
+      if (/input buffer exceeded/.test(r.stderr)) {
+        ok("an oversized line ends the connection instead of buffering forever");
+      } else {
+        bad(
+          "an oversized line ends the connection instead of buffering forever",
+          `exited 1, but not for the buffer cap: ${r.stderr.trim().slice(0, 160)}`,
+        );
+      }
     } else {
       bad(
         "an oversized line ends the connection instead of buffering forever",
         `exit code ${r.exitCode}, signal ${r.signal}`,
       );
     }
+  }
+
+  // --- rubbish in front of a request must not swallow the request --------
+  {
+    const r = await exchange(
+      'GARBAGE {"jsonrpc":"2.0","id":7,"method":"ping"}\n',
+    );
+    expect("a request behind a rubbish fragment is still answered", r, 1, (m) =>
+      m[0]?.id === 7 && m[0]?.result
+        ? null
+        : `the request was swallowed: ${show(m).slice(0, 200)}`,
+    );
+  }
+  {
+    const r = await exchange(
+      '42 {"jsonrpc":"2.0","id":8,"method":"ping"}\n',
+    );
+    // "42" is a valid JSON value, so it is answered as an invalid request —
+    // and the request behind it still gets its own answer.
+    expect("a request behind a number is still answered", r, 2, (m) => {
+      const ping = byId(m, 8);
+      if (!ping) return `the request was swallowed: ${show(m).slice(0, 200)}`;
+      return ping.result ? null : `the request was refused: ${show(ping).slice(0, 200)}`;
+    });
   }
 
   fs.rmSync(workRoot, { recursive: true, force: true });

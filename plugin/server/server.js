@@ -110,10 +110,16 @@ const S = {
         enum: values,
         ...extra,
     }),
-    /** Accepts either a number of seconds or a duration string like "1m30s". */
+    /**
+     * Accepts either a number of seconds or a duration string like "1m30s".
+     *
+     * The string has to be a duration all the way through. The engine adds up
+     * the groups it recognises and ignores the rest, so "1m30s oops" would
+     * silently become 90 seconds.
+     */
     duration: (description) => ({
         description: `${description} (seconds as a number, or a duration string such as "1m30s")`,
-        anyOf: [{ type: "number" }, { type: "string" }],
+        anyOf: [{ type: "number" }, { type: "string", durationString: true }],
     }),
     /**
      * A number the engine normalises with `Number()`.
@@ -325,6 +331,7 @@ const TOOLS = [
             start: S.duration("Start time"),
             duration: S.duration("Duration"),
             track: S.numeric("Text track index (0 = captions, 1 = titles/overlays)"),
+            subtitle: S.boolean("Use the caption defaults — smaller size, an outline, and the low caption position"),
             style: S.object("Text style", textStyleProperties),
         }, ["name", "text", "start", "duration"]),
         handler: (args) => {
@@ -687,9 +694,30 @@ function splitJsonValues(line) {
             }
             continue;
         }
-        // A bare primitive runs to the end of the line.
-        const chunk = line.slice(start).trim();
-        index = line.length;
+        // A bare primitive runs to the end of its token — not to the end of the
+        // line. "GARBAGE {a request}" is a fragment followed by a request, and
+        // the request still has to be answered.
+        let end = index;
+        if (line[index] === '"') {
+            end = index + 1;
+            while (end < line.length) {
+                if (line[end] === "\\") {
+                    end += 2;
+                    continue;
+                }
+                if (line[end] === '"') {
+                    end++;
+                    break;
+                }
+                end++;
+            }
+        }
+        else {
+            while (end < line.length && !/[\s,{}[\]]/.test(line[end]))
+                end++;
+        }
+        const chunk = line.slice(index, end);
+        index = end;
         try {
             values.push(JSON.parse(chunk));
         }
@@ -703,14 +731,8 @@ process.stdin.setEncoding("utf8");
 process.stdin.on("data", (chunk) => {
     buffer += chunk;
     if (buffer.length > MAX_BUFFER_BYTES) {
-        // stderr is the log channel, and the host reads it; write it synchronously
-        // so the reason is not lost when the process goes away.
-        try {
-            fs.writeSync(2, `jianying-mcp: input buffer exceeded ${MAX_BUFFER_BYTES} bytes without a newline; dropping the connection.\n`);
-        }
-        catch {
-            /* the log channel is gone too */
-        }
+        // The log channel may be gone too, so the write is guarded.
+        logLine(`jianying-mcp: input buffer exceeded ${MAX_BUFFER_BYTES} bytes without a newline; dropping the connection.`);
         process.exit(1);
     }
     let index;
@@ -737,10 +759,24 @@ process.stdin.on("data", (chunk) => {
             replyError(null, -32700, "Parse error: the line is not valid JSON.");
         }
         else if (failures > 0) {
-            fs.writeSync(2, "jianying-mcp: ignored a malformed fragment on an otherwise readable line.\n");
+            logLine("jianying-mcp: ignored a malformed fragment on an otherwise readable line.");
         }
     }
 });
+/**
+ * Writes a line to the log channel.
+ *
+ * The log channel can be gone — a peer that closed stderr — and a failed log
+ * write must not take the server down.
+ */
+function logLine(message) {
+    try {
+        fs.writeSync(2, message.endsWith("\n") ? message : message + "\n");
+    }
+    catch {
+        /* the log channel is gone too */
+    }
+}
 /**
  * The transport is gone, so the server is done — but a tool call that is
  * still running must not be cut off half-way. Exiting right away could
@@ -749,6 +785,15 @@ process.stdin.on("data", (chunk) => {
  */
 function shutdown(graceMs) {
     process.exitCode = 0;
+    // Releasing the stdin handle lets the process end as soon as the work in
+    // flight is done. Without this the handle keeps the event loop alive and
+    // every signal costs the full grace period.
+    try {
+        process.stdin.unref();
+    }
+    catch {
+        /* stdin is already closed */
+    }
     const timer = setTimeout(() => process.exit(0), graceMs);
     timer.unref();
 }
@@ -762,13 +807,13 @@ process.stdout.on("error", (error) => {
         process.exit(0);
         return;
     }
-    process.stderr.write(`jianying-mcp stdout error: ${error.message}\n`);
+    logLine(`jianying-mcp stdout error: ${error.message}`);
 });
 // A crash in one request must not take the server down and break the host
 // session. Log to stderr (stdout carries the protocol) and keep serving.
 process.on("uncaughtException", (error) => {
-    process.stderr.write(`jianying-mcp uncaught exception: ${error?.stack ?? error}\n`);
+    logLine(`jianying-mcp uncaught exception: ${error?.stack ?? error}`);
 });
 process.on("unhandledRejection", (reason) => {
-    process.stderr.write(`jianying-mcp unhandled rejection: ${String(reason)}\n`);
+    logLine(`jianying-mcp unhandled rejection: ${String(reason)}`);
 });

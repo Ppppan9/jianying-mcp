@@ -59,6 +59,16 @@ export function timerangesOverlap(a, b) {
 // Time helpers
 // ---------------------------------------------------------------------------
 /**
+ * The duration strings the engine understands.
+ *
+ * `parseSeconds` scans for number-and-unit groups and adds them up, so it
+ * quietly ignores anything it does not recognise — "1m30s oops" becomes 90
+ * seconds. That is forgiving, but a typo in a caption time is a silent wrong
+ * answer. The schema uses this pattern to require the *whole* string to be a
+ * duration, so trailing rubbish is refused before it reaches the engine.
+ */
+export const DURATION_STRING_PATTERN = /^(?:-?\d+(?:\.\d+)?|\s*\d+(?:\.\d+)?\s*(?:ms|h|m|s)(?:\s*\d+(?:\.\d+)?\s*(?:ms|h|m|s))*)\s*$/i;
+/**
  * Accepts "1.5", "90s", "1m30s", "500ms", or a number of seconds.
  * Returns seconds.
  *
