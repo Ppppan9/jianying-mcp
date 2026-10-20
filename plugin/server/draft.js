@@ -26,6 +26,35 @@ export const US = 1_000_000;
  * Verified against the upstream implementation's output.
  */
 const TEXT_RENDER_INDEX = 15000;
+/**
+ * Base render index per track type, matching the upstream TrackType enum.
+ * A track's render index is its base plus its relative index within that
+ * type, so higher values sit closer to the foreground.
+ */
+const TRACK_BASE_RENDER_INDEX = {
+    video: 0,
+    audio: 0,
+    text: TEXT_RENDER_INDEX,
+};
+/**
+ * Default track names, matching the names the upstream implementation uses
+ * when creating the first track of each type.
+ */
+const DEFAULT_TRACK_NAMES = {
+    video: "VideoTrack",
+    audio: "Audio",
+    text: "Subtitles",
+};
+/**
+ * Two ranges overlap when neither ends before the other starts.
+ * Adjacent ranges (one ends exactly where the other begins) do not overlap.
+ * Mirrors the upstream Timerange.overlaps semantics.
+ */
+export function timerangesOverlap(a, b) {
+    const aEnd = a.start + a.duration;
+    const bEnd = b.start + b.duration;
+    return !(aEnd <= b.start || bEnd <= a.start);
+}
 // ---------------------------------------------------------------------------
 // Time helpers
 // ---------------------------------------------------------------------------
@@ -111,6 +140,15 @@ const IMAGE_EXTENSIONS = new Set([
     ".jpg", ".jpeg", ".png", ".webp", ".bmp", ".tif", ".tiff", ".heic", ".gif",
 ]);
 /**
+ * Duration assigned to a still image that has no intrinsic duration.
+ *
+ * The upstream implementation falls back to 10 seconds when a probe cannot
+ * determine a duration, and treats such files as video material. Matching
+ * that keeps the produced draft consistent with drafts created by the
+ * reference tooling.
+ */
+const STILL_IMAGE_DEFAULT_DURATION_US = 10_000_000;
+/**
  * Probes a media file for duration and dimensions.
  * Uses ffprobe when available (no native dependency), and falls back to the
  * file extension for still images.
@@ -128,9 +166,33 @@ export async function probeMedia(filePath) {
         return probe;
     }
     if (IMAGE_EXTENSIONS.has(ext)) {
-        return { duration: 10_000 * US, width: 1920, height: 1080, kind: "photo" };
+        return {
+            duration: STILL_IMAGE_DEFAULT_DURATION_US,
+            width: 1920,
+            height: 1080,
+            kind: "video",
+        };
     }
-    throw new Error(`Cannot probe media: ${abs}. Install ffmpeg/ffprobe (brew install ffmpeg) or pass an explicit duration.`);
+    if (!(await hasFfprobe())) {
+        throw new Error(`Cannot probe "${abs}": ffprobe is not available on PATH. ` +
+            `Install it (brew install ffmpeg / apt install ffmpeg), or use a still image.`);
+    }
+    throw new Error(`Cannot probe "${abs}": ffprobe could not read this file. ` +
+        `It may be corrupt or in an unsupported format.`);
+}
+/** Reports whether ffprobe can be executed at all. */
+let ffprobeAvailable = null;
+async function hasFfprobe() {
+    if (ffprobeAvailable !== null)
+        return ffprobeAvailable;
+    try {
+        await execFileAsync("ffprobe", ["-version"], { timeout: 5_000 });
+        ffprobeAvailable = true;
+    }
+    catch {
+        ffprobeAvailable = false;
+    }
+    return ffprobeAvailable;
 }
 async function tryFfprobe(abs) {
     try {
@@ -150,11 +212,14 @@ async function tryFfprobe(abs) {
         if (rawDur)
             durationUs = Math.round(Number(rawDur) * US);
         if (video) {
+            // A single-frame image exposes a video stream but reports no duration.
+            // The upstream implementation falls back to 10 seconds and keeps the
+            // material classified as video.
             return {
-                duration: durationUs,
+                duration: durationUs > 0 ? durationUs : STILL_IMAGE_DEFAULT_DURATION_US,
                 width: Number(video.width) || 1920,
                 height: Number(video.height) || 1080,
-                kind: IMAGE_EXTENSIONS.has(path.extname(abs).toLowerCase()) ? "photo" : "video",
+                kind: "video",
             };
         }
         if (audio) {
@@ -238,6 +303,11 @@ export class Draft {
         this.root = resolveDraftsRoot(options.draftsRoot);
         this.dir = path.join(this.root, this.name);
         this.materialsDir = path.join(this.dir, "materials");
+        // Defence in depth: even with a sanitised name, refuse to write outside
+        // the drafts root.
+        if (!isInside(this.root, this.dir)) {
+            throw new Error(`Unsafe draft path: "${this.dir}" is outside the drafts root "${this.root}".`);
+        }
         this.explicitResolution =
             options.width !== undefined || options.height !== undefined;
         this.canvasWidth = this.width;
@@ -246,29 +316,48 @@ export class Draft {
             if (!options.overwrite) {
                 throw new Error(`Draft "${this.name}" already exists at ${this.dir}. Pass overwrite=true to replace it.`);
             }
+            // Only replace something that actually looks like a draft. Overwriting
+            // must never delete an unrelated directory that happens to share the
+            // name.
+            if (!looksLikeDraft(this.dir)) {
+                throw new Error(`Refusing to overwrite "${this.dir}": it does not look like a JianYing draft ` +
+                    `(no draft_info.json and no draft_meta_info.json).`);
+            }
             fs.rmSync(this.dir, { recursive: true, force: true });
         }
         fs.mkdirSync(this.materialsDir, { recursive: true });
     }
     // -- track helpers ------------------------------------------------------
-    ensureTrack(type, index) {
-        let track = this.tracks.find((t) => t.type === type && t.attribute === index);
+    /**
+     * Returns the track for the given type and relative index, creating it if
+     * needed.
+     *
+     * `relativeIndex` is the track's position among tracks of the same type.
+     * In the JianYing schema the track's `attribute` field is the mute flag
+     * (always 0 here) and stacking order is carried by `render_index`. The
+     * upstream implementation gives every track of a type the same base render
+     * index, so the relative index only affects ordering in the track list.
+     */
+    ensureTrack(type, relativeIndex) {
+        const index = Math.max(0, Math.trunc(relativeIndex));
+        let track = this.tracks.find((t) => t.type === type && t.index === index);
         if (!track) {
             track = {
                 id: randomUUID().replace(/-/g, ""),
                 type,
-                attribute: index,
+                index,
                 segments: [],
-                renderIndex: type === "video" ? index : undefined,
+                renderIndex: TRACK_BASE_RENDER_INDEX[type],
+                name: index === 0 ? DEFAULT_TRACK_NAMES[type] : `${DEFAULT_TRACK_NAMES[type]}_${index}`,
             };
             this.tracks.push(track);
-            this.tracks.sort((a, b) => trackOrder(a) - trackOrder(b));
+            this.tracks.sort((a, b) => a.renderIndex - b.renderIndex);
         }
         return track;
     }
     /** Timeline end (seconds) of a track, used as the default append position. */
     trackDuration(type, index = 0) {
-        const track = this.tracks.find((t) => t.type === type && t.attribute === index);
+        const track = this.tracks.find((t) => t.type === type && t.index === index);
         if (!track)
             return 0;
         let maxEnd = 0;
@@ -278,6 +367,22 @@ export class Draft {
                 maxEnd = end;
         }
         return maxEnd / US;
+    }
+    /**
+     * Rejects a segment that would overlap an existing one on the same track.
+     *
+     * Overlapping clips make JianYing render unpredictably, and the upstream
+     * implementation raises SegmentOverlap rather than allowing them. Adjacent
+     * clips (one ends exactly where the next begins) are fine.
+     */
+    assertNoOverlap(track, range, kindLabel) {
+        for (const seg of track.segments) {
+            if (timerangesOverlap(seg.targetTimerange, range)) {
+                throw new Error(`SegmentOverlap: new ${kindLabel} [start: ${range.start}, end: ${range.start + range.duration}] ` +
+                    `overlaps an existing segment on track ${track.type}/${track.index} ` +
+                    `[start: ${seg.targetTimerange.start}, end: ${seg.targetTimerange.start + seg.targetTimerange.duration}]`);
+            }
+        }
     }
     // -- media --------------------------------------------------------------
     /**
@@ -355,7 +460,7 @@ export class Draft {
                     material_name: stagedName,
                     media_path: "",
                     path: stagedPath,
-                    type: probe.kind === "photo" ? "photo" : "video",
+                    type: "video",
                     video_algorithm: {
                         algorithms: [],
                         complement_frame_config: null,
@@ -412,22 +517,58 @@ export class Draft {
             this.resolutionResolved = true;
         }
         const startUs = Math.round(parseSeconds(spec.start, 0) * US);
-        const speed = spec.speed ?? 1;
         const sourceStartUs = Math.round(parseSeconds(spec.sourceStart, 0) * US);
-        const durationUs = Math.round(parseSeconds(spec.duration, 0) * US) || (probe.duration - sourceStartUs);
-        if (sourceStartUs + durationUs > probe.duration + 1000) {
-            throw new Error(`Requested range ${sourceStartUs / US}s..${(sourceStartUs + durationUs) / US}s exceeds media duration ${probe.duration / US}s`);
+        // Speed semantics follow the upstream VideoSegment constructor exactly:
+        //
+        //   source range + speed given:
+        //       target = source duration / speed
+        //   source range given, no speed:
+        //       speed  = source duration / target duration
+        //       target = requested target duration
+        //   only a target duration given:
+        //       speed  = requested speed (default 1)
+        //       source = target duration * speed
+        //
+        // The caller may give either `duration` (target) or `sourceStart`
+        // (source offset); `duration` is always the timeline slot length.
+        const requestedTargetUs = Math.round(parseSeconds(spec.duration, 0) * US);
+        const requestedSpeed = spec.speed ?? 1;
+        const hasSourceOffset = spec.sourceStart !== undefined;
+        let sourceUs;
+        let targetUs;
+        let effectiveSpeed;
+        if (requestedTargetUs > 0) {
+            // `duration` is the timeline slot length.
+            targetUs = requestedTargetUs;
+            effectiveSpeed = requestedSpeed;
+            sourceUs = Math.round(targetUs * effectiveSpeed);
         }
+        else if (hasSourceOffset) {
+            // No explicit length: consume the rest of the material from the offset.
+            sourceUs = Math.max(0, probe.duration - sourceStartUs);
+            targetUs = sourceUs;
+            effectiveSpeed = 1;
+        }
+        else {
+            sourceUs = Math.max(0, probe.duration - sourceStartUs);
+            targetUs = sourceUs;
+            effectiveSpeed = requestedSpeed;
+        }
+        if (sourceStartUs + sourceUs > probe.duration + 1000) {
+            throw new Error(`Requested range ${sourceStartUs / US}s..${(sourceStartUs + sourceUs) / US}s exceeds media duration ${probe.duration / US}s`);
+        }
+        const targetRange = { start: startUs, duration: targetUs };
+        this.assertNoOverlap(track, targetRange, "video clip");
         const seg = {
             id: randomUUID().replace(/-/g, ""),
             materialId,
-            targetTimerange: { start: startUs, duration: durationUs },
-            sourceTimerange: { start: sourceStartUs, duration: durationUs },
-            speed,
+            targetTimerange: targetRange,
+            sourceTimerange: { start: sourceStartUs, duration: sourceUs },
+            speed: effectiveSpeed,
             volume: spec.volume ?? 1.0,
             extraMaterialRefs: [],
             clip: defaultClipSettings(),
-            speedId: this.registerSpeed(speed),
+            speedId: this.registerSpeed(effectiveSpeed),
         };
         track.segments.push(seg);
         return seg;
@@ -436,14 +577,24 @@ export class Draft {
     async addAudio(spec) {
         const { materialId, probe } = await this.registerMedia(spec.filePath, "audio");
         const track = this.ensureTrack("audio", spec.track ?? 0);
+        // The upstream implementation refuses to treat a file with a video track
+        // as an audio material; doing so produces a draft JianYing cannot read.
+        if (probe.kind === "video") {
+            throw new Error(`Audio material must not contain a video track: ${path.resolve(spec.filePath)}`);
+        }
         const startUs = Math.round(parseSeconds(spec.start, 0) * US);
         const sourceStartUs = Math.round(parseSeconds(spec.sourceStart, 0) * US);
         const remaining = Math.max(0, probe.duration - sourceStartUs);
         const durationUs = Math.round(parseSeconds(spec.duration, 0) * US) || remaining;
+        if (sourceStartUs + durationUs > probe.duration + 1000) {
+            throw new Error(`Requested range ${sourceStartUs / US}s..${(sourceStartUs + durationUs) / US}s exceeds media duration ${probe.duration / US}s`);
+        }
+        const targetRange = { start: startUs, duration: durationUs };
+        this.assertNoOverlap(track, targetRange, "audio clip");
         const seg = {
             id: randomUUID().replace(/-/g, ""),
             materialId,
-            targetTimerange: { start: startUs, duration: durationUs },
+            targetTimerange: targetRange,
             sourceTimerange: { start: sourceStartUs, duration: durationUs },
             speed: 1,
             volume: spec.volume ?? 1.0,
@@ -451,21 +602,38 @@ export class Draft {
             speedId: this.registerSpeed(1),
         };
         if (spec.fadeIn || spec.fadeOut) {
-            seg.fade = {
-                fadeIn: Math.round(parseSeconds(spec.fadeIn, 0) * US),
-                fadeOut: Math.round(parseSeconds(spec.fadeOut, 0) * US),
-            };
+            const fadeId = randomUUID().replace(/-/g, "");
+            this.addMaterial({
+                id: fadeId,
+                kind: "audio_fade",
+                data: {
+                    id: fadeId,
+                    fade_in_duration: Math.round(parseSeconds(spec.fadeIn, 0) * US),
+                    fade_out_duration: Math.round(parseSeconds(spec.fadeOut, 0) * US),
+                    fade_type: 0,
+                    type: "audio_fade",
+                },
+            });
+            seg.extraMaterialRefs.push(fadeId);
         }
         track.segments.push(seg);
         return seg;
     }
-    /** Adds a text / subtitle segment to a text track. */
+    /**
+     * Adds a text segment to the text track.
+     *
+     * `subtitle` switches to the caption defaults (smaller size, black
+     * outline, placed low on the canvas). Plain text uses the upstream
+     * TextSegment defaults instead.
+     */
     addText(spec) {
         const track = this.ensureTrack("text", 0);
         const materialId = randomUUID().replace(/-/g, "");
-        const style = normalizeStyle(spec.style);
+        const base = spec.subtitle ? SUBTITLE_DEFAULT_STYLE : TEXT_DEFAULT_STYLE;
+        const style = normalizeStyle(spec.style, base);
         const chars = [...spec.text];
         // Build per-run styles; upstream emits one style span covering the text.
+        const hasStroke = style.stroke.width > 0;
         const content = {
             styles: [
                 {
@@ -481,16 +649,20 @@ export class Draft {
                     bold: style.bold,
                     italic: style.italic,
                     underline: style.underline,
-                    strokes: [
-                        {
-                            content: { solid: { alpha: 1.0, color: style.stroke.color } },
-                            width: style.stroke.width,
-                        },
-                    ],
+                    strokes: hasStroke
+                        ? [
+                            {
+                                content: { solid: { alpha: 1.0, color: style.stroke.color } },
+                                width: style.stroke.width,
+                            },
+                        ]
+                        : [],
                 },
             ],
             text: spec.text,
         };
+        // check_flag is a bitmask of the effects a text material carries.
+        const checkFlag = 7 | (hasStroke ? 8 : 0);
         this.addMaterial({
             id: materialId,
             kind: "text",
@@ -504,24 +676,31 @@ export class Draft {
                 line_feed: 1,
                 line_max_width: 0.82,
                 force_apply_line_max_width: false,
-                check_flag: 15,
+                check_flag: checkFlag,
+                // The material type stays "text" for both plain text and captions.
+                // JianYing only uses "subtitle" for auto-wrapping text, and the
+                // reference implementation does not enable it.
                 type: "text",
                 global_alpha: style.alpha,
             },
         });
         const startUs = Math.round(parseSeconds(spec.start, 0) * US);
         const durationUs = Math.round(parseSeconds(spec.duration, 0) * US);
+        const targetRange = { start: startUs, duration: durationUs };
+        this.assertNoOverlap(track, targetRange, "text segment");
         const seg = {
             id: randomUUID().replace(/-/g, ""),
             materialId,
-            targetTimerange: { start: startUs, duration: durationUs },
+            targetTimerange: targetRange,
             sourceTimerange: null,
             speed: 1,
             volume: 1,
             extraMaterialRefs: [],
-            // Text segments sit low on the canvas by default, matching the value
-            // JianYing itself writes for imported subtitles.
-            clip: { ...defaultClipSettings(), transform: { x: 0.0, y: -0.8 } },
+            // Subtitles sit low on the canvas, matching the value JianYing itself
+            // writes for imported captions. Plain text keeps the default position.
+            clip: spec.subtitle
+                ? { ...defaultClipSettings(), transform: { x: 0.0, y: SUBTITLE_TRANSFORM_Y } }
+                : defaultClipSettings(),
         };
         track.segments.push(seg);
         return seg;
@@ -542,19 +721,64 @@ export class Draft {
             start: (startUs + i * perLine) / US,
             duration: perLine / US,
             style: opts.style,
+            subtitle: true,
         }));
     }
-    /** Removes every segment whose material id matches the given path. */
+    /**
+     * Removes every clip that references the given media file.
+     *
+     * Also drops the now-orphaned materials (the media entry, its speed
+     * material and any audio fade) and deletes the staged copy from
+     * `materials/`. Leaving orphans behind makes the draft inconsistent —
+     * the material list would reference files that no segment uses.
+     */
     removeMedia(filePath) {
         const abs = path.resolve(filePath);
         const staged = this.stagedMedia.get(abs);
         if (!staged)
             return 0;
         let removed = 0;
+        const removedSpeedIds = new Set();
+        const removedFadeIds = new Set();
         for (const track of this.tracks) {
-            const before = track.segments.length;
-            track.segments = track.segments.filter((s) => s.materialId !== staged.materialId);
-            removed += before - track.segments.length;
+            const keep = [];
+            for (const seg of track.segments) {
+                if (seg.materialId !== staged.materialId) {
+                    keep.push(seg);
+                    continue;
+                }
+                removed++;
+                if (seg.speedId)
+                    removedSpeedIds.add(seg.speedId);
+                for (const ref of seg.extraMaterialRefs)
+                    removedFadeIds.add(ref);
+            }
+            track.segments = keep;
+        }
+        if (removed === 0)
+            return 0;
+        // Only drop the media material when no segment still references it.
+        const stillReferenced = this.tracks.some((t) => t.segments.some((s) => s.materialId === staged.materialId));
+        if (!stillReferenced) {
+            this.materials.delete(staged.materialId);
+            this.materialOrder = this.materialOrder.filter((m) => m.id !== staged.materialId);
+            this.stagedMedia.delete(abs);
+            // Remove the staged copy from disk.
+            const stagedPath = path.join(this.materialsDir, staged.stagedName);
+            try {
+                fs.rmSync(stagedPath, { force: true });
+            }
+            catch {
+                /* the staged file may already be gone; the draft is still consistent */
+            }
+        }
+        // Drop the speed and fade materials that only those segments used.
+        for (const id of [...removedSpeedIds, ...removedFadeIds]) {
+            const stillUsed = this.tracks.some((t) => t.segments.some((s) => s.speedId === id || s.extraMaterialRefs.includes(id)));
+            if (!stillUsed) {
+                this.materials.delete(id);
+                this.materialOrder = this.materialOrder.filter((m) => m.id !== id);
+            }
         }
         return removed;
     }
@@ -581,9 +805,10 @@ export class Draft {
             durationSeconds: this.duration(),
             tracks: this.tracks.map((t) => ({
                 type: t.type,
-                attribute: t.attribute,
+                index: t.index,
+                renderIndex: t.renderIndex,
                 segmentCount: t.segments.length,
-                durationSeconds: Math.round(this.trackDuration(t.type, t.attribute) * 1000) / 1000,
+                durationSeconds: Math.round(this.trackDuration(t.type, t.index) * 1000) / 1000,
                 segments: t.segments.map((s) => ({
                     id: s.id,
                     materialId: s.materialId,
@@ -612,19 +837,23 @@ export class Draft {
         for (const entry of this.materialOrder) {
             const bucket = entry.kind === "speed"
                 ? "speeds"
-                : entry.kind === "video"
-                    ? (entry.data.type === "photo" ? "images" : "videos")
-                    : entry.kind === "audio"
-                        ? "audios"
-                        : "texts";
+                : entry.kind === "audio_fade"
+                    ? "audio_fades"
+                    : entry.kind === "video"
+                        ? "videos"
+                        : entry.kind === "audio"
+                            ? "audios"
+                            : "texts";
             materials[bucket].push(entry.data);
         }
         const tracks = this.tracks.map((t) => ({
-            attribute: t.attribute,
+            // `attribute` is the mute flag in the JianYing schema, not a track
+            // index. Every track here is unmuted.
+            attribute: 0,
             flag: 0,
             id: t.id,
             is_default_name: false,
-            name: "",
+            name: t.name,
             segments: t.segments.map((s) => this.serializeSegment(t, s)),
             type: t.type,
         }));
@@ -721,8 +950,12 @@ export class Draft {
             enable_smart_color_adjust: false,
             last_nonzero_volume: 1.0,
             reverse: false,
-            track_attribute: track.attribute,
-            track_render_index: track.renderIndex ?? 0,
+            // `track_attribute` mirrors the parent track's mute flag.
+            track_attribute: 0,
+            // `track_render_index` is the track's position in the track list,
+            // while `render_index` is the stacking layer. The upstream
+            // implementation writes 0 for every track it creates.
+            track_render_index: 0,
             visible: true,
             id: seg.id,
             material_id: seg.materialId,
@@ -734,32 +967,22 @@ export class Draft {
             volume: seg.volume,
             extra_material_refs: extraRefs,
             is_tone_modify: false,
+            render_index: track.renderIndex,
         };
         if (track.type === "video") {
             base.clip = seg.clip ?? defaultClipSettings();
             base.uniform_scale = { on: true, value: 1.0 };
             base.hdr_settings = { intensity: 1.0, mode: 1, nits: 1000 };
-            base.render_index = track.renderIndex ?? 0;
         }
         else if (track.type === "audio") {
             // Audio segments are not visual: JianYing expects explicit nulls here.
             base.clip = null;
             base.hdr_settings = null;
-            base.render_index = track.renderIndex ?? 0;
         }
         else {
-            // Text segments are visual but carry no source range and sit above
-            // every visual layer (render index 15000).
+            // Text segments are visual but carry no source range.
             base.clip = seg.clip ?? defaultClipSettings();
             base.uniform_scale = { on: true, value: 1.0 };
-            base.render_index = TEXT_RENDER_INDEX;
-        }
-        if (seg.fade) {
-            base.fade = {
-                fade_in: seg.fade.fadeIn,
-                fade_out: seg.fade.fadeOut,
-                fade_type: 0,
-            };
         }
         return base;
     }
@@ -791,13 +1014,6 @@ export class Draft {
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-function trackOrder(track) {
-    if (track.type === "video")
-        return track.attribute;
-    if (track.type === "audio")
-        return 1000 + track.attribute;
-    return 2000 + track.attribute;
-}
 /**
  * The host OS string JianYing records in the draft.
  * Matches the upstream implementation, which writes platform.system().lower().
@@ -818,23 +1034,108 @@ function defaultClipSettings() {
         flip: { horizontal: false, vertical: false },
     };
 }
-function normalizeStyle(partial) {
+/**
+ * Default style for a general text segment.
+ * Mirrors the upstream TextSegment defaults: size 8, no border, no transform.
+ */
+const TEXT_DEFAULT_STYLE = {
+    size: 8.0,
+    bold: false,
+    italic: false,
+    underline: false,
+    color: [1.0, 1.0, 1.0],
+    alpha: 1.0,
+    align: 0,
+    stroke: { color: [0.0, 0.0, 0.0], width: 0 },
+};
+/**
+ * Default style for subtitle captions.
+ *
+ * Subtitles render low on the canvas with an outline so they stay legible
+ * over any footage — the same defaults the upstream skill applies to
+ * imported subtitles (size 5, black outline, transform_y -0.8).
+ */
+const SUBTITLE_DEFAULT_STYLE = {
+    size: 5.0,
+    bold: false,
+    italic: false,
+    underline: false,
+    color: [1.0, 1.0, 1.0],
+    alpha: 1.0,
+    align: 0,
+    // Stroke width is derived the same way the upstream implementation derives
+    // it (width / 100 * 0.2) so the serialized value matches bit for bit.
+    stroke: { color: [0.0, 0.0, 0.0], width: 40.0 / 100.0 * 0.2 },
+};
+/** Vertical offset that places a text segment low on the canvas. */
+const SUBTITLE_TRANSFORM_Y = -0.8;
+/**
+ * Merges a partial style over a base style.
+ * The stroke width is only defaulted when the caller supplies a stroke
+ * without a width.
+ */
+function normalizeStyle(partial, base) {
+    const stroke = partial?.stroke;
     return {
-        size: partial?.size ?? 5.0,
-        bold: partial?.bold ?? false,
-        italic: partial?.italic ?? false,
-        underline: partial?.underline ?? false,
-        color: partial?.color ?? [1.0, 1.0, 1.0],
-        alpha: partial?.alpha ?? 1.0,
-        align: partial?.align ?? 0,
-        // Stroke width is derived the same way the upstream implementation derives
-        // it (width / 100 * 0.2) so the serialized value matches bit for bit.
-        stroke: partial?.stroke ?? {
-            color: [0.0, 0.0, 0.0],
-            width: 40.0 / 100.0 * 0.2,
-        },
+        size: partial?.size ?? base.size,
+        bold: partial?.bold ?? base.bold,
+        italic: partial?.italic ?? base.italic,
+        underline: partial?.underline ?? base.underline,
+        color: partial?.color ?? base.color,
+        alpha: partial?.alpha ?? base.alpha,
+        align: partial?.align ?? base.align,
+        stroke: stroke
+            ? {
+                color: stroke.color ?? base.stroke.color,
+                width: stroke.width ?? base.stroke.width,
+            }
+            : base.stroke,
     };
 }
+/**
+ * Returns true when `child` is the same as, or nested inside, `parent`.
+ * Used to make sure no write escapes the drafts root.
+ */
+function isInside(parent, child) {
+    const rel = path.relative(path.resolve(parent), path.resolve(child));
+    if (rel === "")
+        return true;
+    return !rel.startsWith("..") && !path.isAbsolute(rel);
+}
+/**
+ * Returns true when a directory looks like a JianYing draft, so an overwrite
+ * cannot destroy an unrelated directory that happens to share the name.
+ */
+function looksLikeDraft(dir) {
+    try {
+        if (fs.existsSync(path.join(dir, "draft_info.json")) ||
+            fs.existsSync(path.join(dir, "draft_content.json")) ||
+            fs.existsSync(path.join(dir, "draft_meta_info.json"))) {
+            return true;
+        }
+        // A half-created draft may only have its materials folder — that happens
+        // when a previous run was interrupted. It is safe to replace, because
+        // every entry is something this tool itself creates.
+        const entries = fs.readdirSync(dir);
+        if (entries.length === 0)
+            return true;
+        return entries.every((e) => e === "materials" ||
+            e === "draft_settings" ||
+            e === "key_value.json");
+    }
+    catch {
+        return false;
+    }
+}
+/**
+ * Device names Windows reserves. A draft cannot use them, because the
+ * directory cannot be created there.
+ */
+const WINDOWS_RESERVED_NAMES = new Set([
+    "CON", "PRN", "AUX", "NUL",
+    "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
+    "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
+]);
 function sanitizeName(name) {
     const cleaned = String(name)
         .replace(/[<>:"/\\|?*\u0000-\u001f]+/g, "_")
@@ -844,6 +1145,9 @@ function sanitizeName(name) {
         .replace(/\s+/g, " ");
     if (!cleaned)
         throw new Error("Invalid draft name: empty after sanitization.");
+    if (WINDOWS_RESERVED_NAMES.has(cleaned.toUpperCase())) {
+        throw new Error(`Invalid draft name: "${cleaned}" is a reserved device name.`);
+    }
     return cleaned;
 }
 /**

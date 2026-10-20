@@ -39,8 +39,11 @@ async function main() {
   await client.call("jianying_add_audio", {
     name: DRAFT_NAME, filePath: path.join(MEDIA, "bgm.mp3"), start: 0, track: 0,
   });
-  await client.call("jianying_add_text", {
-    name: DRAFT_NAME, text: "黄金样本字幕", start: 1, duration: 3,
+  // The upstream oracle uses `add_text_simple`, which applies the caption
+  // defaults (size 5, black outline, transform_y -0.8). The matching call
+  // here is `jianying_add_subtitles`.
+  await client.call("jianying_add_subtitles", {
+    name: DRAFT_NAME, script: "黄金样本字幕", start: 1, duration: 3, maxChars: 18,
   });
 
   const saved = await client.call("jianying_save_draft", { name: DRAFT_NAME });

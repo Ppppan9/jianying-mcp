@@ -24,6 +24,15 @@ const SERVER_INFO = { name: "jianying-mcp", version: "1.0.0" };
  */
 const sessions = new Map<string, Draft>();
 
+/**
+ * Upper bound on concurrently open drafts.
+ *
+ * Each draft holds its materials and segments in memory, and a long-running
+ * session could otherwise accumulate drafts without bound. The limit is
+ * generous enough for real work while keeping the footprint bounded.
+ */
+const MAX_OPEN_DRAFTS = 32;
+
 function requireSession(name: string): Draft {
   const draft = sessions.get(name);
   if (!draft) {
@@ -32,6 +41,29 @@ function requireSession(name: string): Draft {
     );
   }
   return draft;
+}
+
+/**
+ * Registers a draft, refusing to silently replace an existing session.
+ *
+ * Replacing would discard the in-memory timeline of an unsaved draft, which
+ * is a silent data loss the caller cannot see.
+ */
+function registerSession(draft: Draft): void {
+  const existing = sessions.get(draft.name);
+  if (existing && existing !== draft) {
+    throw new Error(
+      `Draft "${draft.name}" is already open in this session. ` +
+        `Close it first with jianying_close_draft, or use a different name.`,
+    );
+  }
+  if (!sessions.has(draft.name) && sessions.size >= MAX_OPEN_DRAFTS) {
+    throw new Error(
+      `Too many drafts are open (limit ${MAX_OPEN_DRAFTS}). ` +
+        `Close some with jianying_close_draft before opening more.`,
+    );
+  }
+  sessions.set(draft.name, draft);
 }
 
 // ---------------------------------------------------------------------------
@@ -111,7 +143,7 @@ const TOOLS: ToolDef[] = [
         draftsRoot: resolveDraftsRoot(args.draftsRoot),
         overwrite: args.overwrite ?? false,
       });
-      sessions.set(draft.name, draft);
+      registerSession(draft);
       return { ok: true, draft: draft.summary() };
     },
   },
@@ -136,8 +168,36 @@ const TOOLS: ToolDef[] = [
         draftsRoot: resolveDraftsRoot(args.draftsRoot),
         overwrite: true,
       });
-      sessions.set(draft.name, draft);
+      registerSession(draft);
       return { ok: true, draft: draft.summary() };
+    },
+  },
+
+  {
+    name: "jianying_close_draft",
+    description:
+      "Close an open draft and release its memory. Unsaved changes are lost, so call jianying_save_draft first. Use this when a draft is finished or was created by mistake.",
+    inputSchema: S.object("Close an open draft", {
+      name: S.string("Open draft name"),
+    }, ["name"]),
+    handler: (args) => {
+      const draft = sessions.get(args.name);
+      if (!draft) {
+        return {
+          ok: true,
+          closed: false,
+          message: `No open draft named "${args.name}".`,
+        };
+      }
+      sessions.delete(args.name);
+      return {
+        ok: true,
+        closed: true,
+        name: args.name,
+        draftPath: draft.dir,
+        openDrafts: [...sessions.keys()],
+        note: "Any changes that were not saved with jianying_save_draft are discarded.",
+      };
     },
   },
 
@@ -394,6 +454,22 @@ function send(message: unknown) {
   process.stdout.write(JSON.stringify(message) + "\n");
 }
 
+/**
+ * Serialises a tool result.
+ *
+ * `JSON.stringify` throws on circular structures and BigInt values. A result
+ * that cannot be serialised must not take the whole server down, so the
+ * failure is reported as text instead.
+ */
+function stringifyResult(result: unknown): string {
+  try {
+    return JSON.stringify(result, null, 2) ?? "null";
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return `Result could not be serialised: ${message}`;
+  }
+}
+
 function reply(id: unknown, result: unknown) {
   send({ jsonrpc: "2.0", id, result });
 }
@@ -408,6 +484,21 @@ async function handleMessage(msg: any) {
   // Notifications carry no id and expect no response.
   if (id === undefined || id === null) return;
 
+  try {
+    await dispatch(id, method, params);
+  } catch (error) {
+    // Every request must get exactly one response, even if the handler threw
+    // in an unexpected place.
+    const message = error instanceof Error ? error.message : String(error);
+    try {
+      replyError(id, -32603, `Internal error: ${message}`);
+    } catch {
+      /* the transport is gone; nothing more can be reported */
+    }
+  }
+}
+
+async function dispatch(id: unknown, method: string, params: any) {
   switch (method) {
     case "initialize":
       reply(id, {
@@ -441,7 +532,7 @@ async function handleMessage(msg: any) {
       try {
         const result = await tool.handler(params?.arguments ?? {});
         reply(id, {
-          content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+          content: [{ type: "text", text: stringifyResult(result) }],
         });
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
@@ -486,3 +577,12 @@ process.stdin.on("data", (chunk) => {
 process.stdin.on("end", () => process.exit(0));
 process.on("SIGTERM", () => process.exit(0));
 process.on("SIGINT", () => process.exit(0));
+
+// A crash in one request must not take the server down and break the host
+// session. Log to stderr (stdout carries the protocol) and keep serving.
+process.on("uncaughtException", (error) => {
+  process.stderr.write(`jianying-mcp uncaught exception: ${error?.stack ?? error}\n`);
+});
+process.on("unhandledRejection", (reason) => {
+  process.stderr.write(`jianying-mcp unhandled rejection: ${String(reason)}\n`);
+});

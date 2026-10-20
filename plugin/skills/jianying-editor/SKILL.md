@@ -55,7 +55,9 @@ jianying_add_video  name=广告_解谜关卡_01  filePath=/abs/b.mp4  start=3  d
 
 - `start` 省略 = 追加到该轨道末尾
 - `track=0` 主画面轨，`track=1` 叠加层（B-roll/画中画）
-- `duration` 超出来源时长会**报错**（不静默截断）
+- `duration` 超出来源时长会**报错**
+- **同轨道片段重叠会报错** —— 相邻可以（前者结束正好是后者开始），重叠不行
+- `duration` 是**时间轴上占的长度**；配 `speed: 2` 时会消耗 2 倍的源素材
 
 ### 4. 加声音
 
@@ -66,6 +68,8 @@ jianying_add_audio  name=...  filePath=/abs/voice.mp3  start=0  track=1  volume=
 
 **轨道分工铁律**：BGM 走 `track=0`，人声/配音走 `track=1`。混在一轨会互相盖住。买量素材里人声必须听得清，BGM 压到 0.2~0.4。
 
+含视频轨的文件（如 mp4）**不能当音频素材**，会报错。
+
 ### 5. 上字幕
 
 ```bash
@@ -74,6 +78,8 @@ jianying_add_subtitles  name=...  script="第一句文案。第二句文案。" 
 
 - 中文短视频按 **18 字/行** 拆，工具自动按标点切
 - 字幕轨独立，不占视频轨
+- 字幕用**字幕样式**（字号 5 + 黑色描边 + 靠下），这是剪映导入字幕的默认位置
+- 要做标题/花字用 `jianying_add_text`，那是**普通文本样式**（字号 8、无描边、居中）
 - 返回的 `lines` 数组要**回读检查**：AI 对数字、专有名词、多音字极易出错
 
 ### 6. 保存 + 验收
@@ -85,6 +91,14 @@ jianying_inspect_draft  name=...
 
 保存后草稿立刻出现在剪映首页的工程列表里。
 
+### 7. 收工
+
+```bash
+jianying_close_draft    name=...
+```
+
+用完关掉，释放内存。同名草稿不能重复打开（会丢掉未保存的改动）。
+
 ## 验收清单（交付前必查）
 
 - [ ] `jianying_inspect_draft` 返回的轨道数符合预期（至少 1 video / 1 audio / 1 text）
@@ -93,6 +107,22 @@ jianying_inspect_draft  name=...
 - [ ] BGM 音量 ≤ 0.4，人声 ≥ 0.8
 - [ ] 分辨率 = 素材分辨率
 - [ ] 字幕文案逐字核对过数字和专有名词
+- [ ] 素材没有用同一个文件反复导入造成冗余（`remove_media` 会一并清掉孤儿素材）
+
+## 工具会主动拦住你的错误
+
+这些不是"建议"，是**会直接报错**的：
+
+| 情况 | 报错 |
+|---|---|
+| 同轨道片段重叠 | `SegmentOverlap` |
+| 源时长超出素材 | `exceeds media duration` |
+| 拿含视频轨的文件当音频 | `must not contain a video track` |
+| 重复打开同名草稿 | `already open`（防止丢未保存的改动） |
+| 覆盖不是草稿的目录 | `does not look like a JianYing draft` |
+| 草稿名是 `..` / `.` / Windows 设备名 | `Invalid draft name` |
+
+看到这些报错就按提示改参数，**不要绕过去** —— 它们拦下的都是剪映会渲染错乱的情况。
 
 ## 导出
 

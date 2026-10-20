@@ -94,6 +94,21 @@ npm run build
 | `jianying_inspect_draft` | Structured timeline summary — the acceptance check |
 | `jianying_export_srt` | Export the text track as SRT |
 | `jianying_probe_media` | Probe duration / resolution / type of a media file |
+| `jianying_close_draft` | Close an open draft and release its memory |
+
+### Guards
+
+The server refuses to produce a broken draft. Each of these raises an
+error instead of writing a file JianYing would mis-render:
+
+- **Overlapping clips** on the same track are rejected (adjacent clips are
+  fine).
+- **Source ranges beyond the media duration** are rejected.
+- **A file with a video track cannot be used as an audio material.**
+- **Re-opening an already open draft** is refused, so an unsaved timeline is
+  never silently discarded.
+- **Overwriting a directory that is not a draft** is refused.
+- **Unsafe draft names** (`..`, `.`, Windows device names) are rejected.
 
 ---
 
@@ -130,47 +145,53 @@ The draft appears in JianYing's project list immediately. **Export is manual**
 
 ## Verification
 
-This project was validated by diffing its output against the upstream
-reference implementation, field by field.
+This project was validated by diffing its output against the reference
+implementation, field by field, in three layers.
 
 ```bash
 npm install && npm run build
-
-# synthetic test media (requires ffmpeg)
 bash scripts/make_test_media.sh
 
-# upstream oracle — clone it first, then point JY_UPSTREAM_SKILL at it
-git clone https://github.com/luoluoluo22/jianying-editor-skill /tmp/jianying-editor-skill
-export JY_UPSTREAM_SKILL=/tmp/jianying-editor-skill
+# 1. end-to-end functional suite
+node dist/verify.js
+
+# 2. differential scenarios against the reference library
+export JY_UPSTREAM_SKILL=/path/to/jianying-editor-skill
+export JY_UPSTREAM_PYTHON=/path/to/python-with-pymediainfo
+node dist/diff_scenarios.js "$JY_UPSTREAM_SKILL" ./test-media ./diff_scenarios
+
+# 3. full-draft diff against the wrapper skill
 python3 scripts/gen_upstream_same.py
-
-# same inputs through this server
 node dist/gen_compare.js ./compare_drafts/mcp
-
-# structural diff
 python3 scripts/compare_drafts.py \
     compare_drafts/upstream/Compare_Up \
     compare_drafts/mcp/Compare_Mcp
 ```
 
 ```
-[A] Structural diff (normalized): 0 difference(s)
-[B] Track layout comparison       → MATCH
-[C] Segment timing comparison     → MATCH
-VERDICT: PASS — MCP draft matches upstream contract
+[1] verify.js            Result: 70 passed, 0 failed
+[2] diff_scenarios.js    Scenarios: 12 matched, 0 differed
+[3] compare_drafts.py    [A] Structural diff: 0 difference(s)
+                         VERDICT: PASS
 ```
 
-The first implementation attempt produced **62** differences. The full list of
-what went wrong — and the exact field-level contract — is documented in
-[`docs/DRAFT_FORMAT.md`](docs/DRAFT_FORMAT.md).
+Layer 2 is the important one: it drives the **underlying `pyJianYingDraft`
+library**, not the wrapper skill, because the wrapper silently drops clip
+speed, audio fades and out-of-range validation. It covers still images, clip
+speed, source offsets, multiple tracks, audio fades, boundary durations, text
+and caption styles, overlaps, out-of-range requests and media removal.
 
-A self-contained test suite runs the server over raw JSON-RPC and asserts the
-draft contract end to end:
+The first implementation attempt produced **62** differences. A later review
+against the reference library found **8 more** in areas the basic comparison
+never reached — the missing `speeds` materials, wrong per-type segment
+fields, a wrong `render_index`, two misspelled material buckets, inverted
+clip-speed semantics, and `attribute` being used as a track index instead of
+a mute flag. The full contract, including every rule this project enforces,
+is in [`docs/DRAFT_FORMAT.md`](docs/DRAFT_FORMAT.md).
 
-```bash
-node dist/verify.js /path/to/test/media ./out_drafts
-# Result: 56 passed, 0 failed
-```
+`scripts/probe_upstream_contract.py` prints the reference library's actual
+behaviour for each rule — use it to re-check anything before changing the
+engine.
 
 ---
 
@@ -182,13 +203,16 @@ src/
   server.ts        # MCP protocol layer (zero-dependency JSON-RPC over stdio)
   mcp-client.ts    # minimal MCP client, used by the test harnesses
   verify.ts        # end-to-end verification harness
+  diff_scenarios.ts# differential scenarios against the reference library
   gen_compare.ts   # generates the comparison draft
   ad_scenario.ts   # realistic ad-creative walkthrough
 plugin/            # ready-to-install MiniMax Code Plugin package
 scripts/
-  compare_drafts.py      # normalized structural diff vs the upstream oracle
-  gen_upstream_same.py   # drives the upstream implementation
-  validate_plugin.py     # validates a Plugin package against the V1 spec
+  compare_drafts.py          # normalized structural diff vs the reference
+  gen_upstream_same.py       # drives the reference wrapper
+  probe_upstream_contract.py # prints the reference library's actual rules
+  make_test_media.sh         # generates the synthetic test media
+  validate_plugin.py         # validates a Plugin package against the V1 spec
 docs/
   DRAFT_FORMAT.md        # the reverse-engineered format contract
 ```
@@ -248,16 +272,29 @@ redistributed here.
 
 ### 验证方式
 
-用上游实现当预言机，逐字段对比两边产出：
+用上游实现当预言机，分三层逐字段对比：
 
 ```
-[A] Structural diff (normalized): 0 difference(s)
-[B] Track layout comparison       → MATCH
-[C] Segment timing comparison     → MATCH
-VERDICT: PASS
+[1] verify.js            Result: 70 passed, 0 failed
+[2] diff_scenarios.js    Scenarios: 12 matched, 0 differed
+[3] compare_drafts.py    [A] Structural diff: 0 difference(s)
+                         VERDICT: PASS
 ```
 
-第一版实现有 **62 处**差异（`speeds` 材质缺失、text 段字段错、`render_index` 不对、素材桶名拼错等），全部记录在 [`docs/DRAFT_FORMAT.md`](docs/DRAFT_FORMAT.md)。
+第 2 层最关键：它驱动的是**底层 `pyJianYingDraft` 库**而不是上游 wrapper —— 因为 wrapper 会静默丢掉变速、音频淡入淡出和越界校验。覆盖静图、变速、源偏移、多轨道、淡入淡出、边界时长、文本与字幕样式、重叠、越界请求、素材移除。
+
+第一版实现有 **62 处**差异。后来对着底层库复审，又挖出 **8 处**之前没覆盖到的：`speeds` 材质缺失、按轨道类型的段字段写错、`render_index` 不对、两个素材桶名拼错、变速语义写反、以及把 `attribute` 当成轨道编号（它其实是静音标志）。完整契约见 [`docs/DRAFT_FORMAT.md`](docs/DRAFT_FORMAT.md)。
+
+### 安全护栏
+
+以下情况会**直接报错**，而不是产出一个剪映会渲染错乱的草稿：
+
+- 同轨道**片段重叠**被拒绝（相邻不算重叠）
+- **源时长超出素材**被拒绝
+- **含视频轨的文件不能当音频素材**
+- **重复打开同名草稿**被拒绝，避免未保存的时间轴被静默丢弃
+- **覆盖非草稿目录**被拒绝
+- **危险草稿名**（`..`、`.`、Windows 设备名）被拒绝
 
 ### 已知限制
 

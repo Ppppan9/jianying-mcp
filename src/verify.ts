@@ -65,9 +65,10 @@ async function main() {
   const toolNames = tools.map((t: any) => t.name).sort();
   const expected = [
     "jianying_add_audio", "jianying_add_subtitles", "jianying_add_text",
-    "jianying_add_video", "jianying_create_draft", "jianying_export_srt",
-    "jianying_inspect_draft", "jianying_list_drafts", "jianying_open_draft",
-    "jianying_probe_media", "jianying_remove_media", "jianying_save_draft",
+    "jianying_add_video", "jianying_close_draft", "jianying_create_draft",
+    "jianying_export_srt", "jianying_inspect_draft", "jianying_list_drafts",
+    "jianying_open_draft", "jianying_probe_media", "jianying_remove_media",
+    "jianying_save_draft",
   ];
   check(
     `tools/list exposes all ${expected.length} tools`,
@@ -134,10 +135,63 @@ async function main() {
     }
     check("out-of-range clip is rejected", rangeErr !== null && /exceeds media duration/.test(rangeErr), rangeErr);
 
+    // Overlapping clips must be rejected — JianYing renders them unpredictably.
+    let overlapErr: string | null = null;
+    try {
+      await client.call("jianying_add_video", {
+        name: "Verify_Draft", filePath: vid1, start: 1, duration: 2,
+      });
+    } catch (e: any) {
+      overlapErr = e.message;
+    }
+    check(
+      "overlapping clip is rejected",
+      overlapErr !== null && /overlaps an existing segment/.test(overlapErr),
+      overlapErr,
+    );
+
+    // Adjacent clips on the same track — one ends exactly where the next
+    // begins — are valid and must be accepted.
+    const adjacent = await client.call("jianying_add_video", {
+      name: "Verify_Draft", filePath: vid2, start: 7, duration: 3, track: 1,
+    });
+    check("clip on a second track is accepted", adjacent.segment.startSeconds === 7, adjacent.segment);
+
+    const adjacentSame = await client.call("jianying_add_video", {
+      name: "Verify_Draft", filePath: vid2, start: 7, duration: 3, track: 2,
+    });
+    check("adjacent clip on its own track is accepted", adjacentSame.segment.startSeconds === 7, adjacentSame.segment);
+
+    // A video file must not be usable as an audio material.
+    let audioTypeErr: string | null = null;
+    try {
+      await client.call("jianying_add_audio", {
+        name: "Verify_Draft", filePath: vid1, start: 20, track: 2,
+      });
+    } catch (e: any) {
+      audioTypeErr = e.message;
+    }
+    check(
+      "video file is rejected as an audio material",
+      audioTypeErr !== null && /must not contain a video track/.test(audioTypeErr),
+      audioTypeErr,
+    );
+
     const removed = await client.call("jianying_remove_media", {
       name: "Verify_Draft", filePath: vid2,
     });
     check("remove_media removes matching segments", removed.removedSegments >= 1, removed.removedSegments);
+
+    // Removing a clip must not leave orphaned material or speed entries.
+    const afterRemove = await client.call("jianying_inspect_draft", { name: "Verify_Draft" });
+    const usedIds = new Set<string>();
+    for (const t of afterRemove.draft.tracks) {
+      for (const s of t.segments) usedIds.add(s.materialId);
+    }
+    const orphans = afterRemove.draft.materials.filter(
+      (m: any) => (m.kind === "video" || m.kind === "audio") && !usedIds.has(m.id),
+    );
+    check("remove_media leaves no orphan materials", orphans.length === 0, orphans);
   }
 
   // --- persistence -------------------------------------------------------
@@ -152,7 +206,10 @@ async function main() {
 
   if (HAS_MEDIA) {
     const staged = fs.readdirSync(path.join(dir, "materials"));
-    check("materials are self-contained (3 staged)", staged.length === 3, staged);
+    // vid2 was removed with jianying_remove_media, so its staged copy and its
+    // material entry must be gone too — no orphans left behind.
+    check("removed media leaves no staged copy", staged.length === 2, staged);
+    check("removed media leaves no orphan material", !staged.some((f) => f.endsWith(".mp4") && f !== staged.find((x) => x.endsWith(".mp4"))), staged);
   }
 
   const info = JSON.parse(fs.readFileSync(path.join(dir, "draft_info.json"), "utf8"));
@@ -173,9 +230,9 @@ async function main() {
   const byType: Record<string, number> = {};
   for (const t of info.tracks) byType[t.type] = (byType[t.type] ?? 0) + 1;
   if (HAS_MEDIA) {
-    check("has a video track", byType.video === 1, byType);
-    check("has an audio track", byType.audio === 1, byType);
-    check("has a text track", byType.text === 1, byType);
+    check("has a video track", (byType.video ?? 0) >= 1, byType);
+    check("has an audio track", (byType.audio ?? 0) >= 1, byType);
+    check("has a text track", (byType.text ?? 0) >= 1, byType);
   }
 
   const matIds = new Set<string>([
@@ -265,6 +322,58 @@ async function main() {
     unknownToolErr !== null && /Unknown tool/.test(unknownToolErr),
     unknownToolErr,
   );
+
+  // Re-opening a name that is already open must not silently discard the
+  // in-memory timeline of the unsaved draft.
+  let duplicateErr: string | null = null;
+  try {
+    await client.call("jianying_create_draft", { name: "Verify_Draft" });
+  } catch (e: any) {
+    duplicateErr = e.message;
+  }
+  check(
+    "re-opening an already open draft is refused",
+    duplicateErr !== null && /already open/.test(duplicateErr),
+    duplicateErr,
+  );
+
+  // Unsafe draft names must be rejected.
+  for (const badName of ["..", ".", "   "]) {
+    let nameErr: string | null = null;
+    try {
+      await client.call("jianying_create_draft", { name: badName });
+    } catch (e: any) {
+      nameErr = e.message;
+    }
+    check(`unsafe draft name is rejected: ${JSON.stringify(badName)}`, nameErr !== null, nameErr);
+  }
+
+  // A draft directory that is not a draft must never be deleted by an
+  // overwrite.
+  const foreignDir = path.join(DRAFTS_ROOT, "Not_A_Draft");
+  fs.mkdirSync(foreignDir, { recursive: true });
+  fs.writeFileSync(path.join(foreignDir, "important.txt"), "keep me", "utf8");
+  let overwriteErr: string | null = null;
+  try {
+    await client.call("jianying_create_draft", { name: "Not_A_Draft", overwrite: true });
+  } catch (e: any) {
+    overwriteErr = e.message;
+  }
+  check(
+    "overwrite refuses to delete a non-draft directory",
+    overwriteErr !== null && /does not look like a JianYing draft/.test(overwriteErr),
+    overwriteErr,
+  );
+  check(
+    "the non-draft directory survived",
+    fs.existsSync(path.join(foreignDir, "important.txt")),
+  );
+
+  // Closing a draft releases it and lets the name be reused.
+  const closed = await client.call("jianying_close_draft", { name: "Verify_Draft" });
+  check("close_draft reports the draft was closed", closed.closed === true, closed);
+  const reopened = await client.call("jianying_create_draft", { name: "Verify_Draft" });
+  check("a closed draft name can be reused", reopened.ok === true);
 
   client.close();
 

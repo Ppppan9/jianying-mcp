@@ -29,5 +29,10 @@ ffmpeg -y -loglevel error \
   -f lavfi -i "sine=frequency=880:duration=5" \
   -c:a libmp3lame "$OUT/bgm.mp3"
 
+# A still image, used to exercise the photo material type.
+ffmpeg -y -loglevel error \
+  -f lavfi -i "color=c=teal:size=800x600" \
+  -frames:v 1 "$OUT/photo.png"
+
 echo "Test media written to $OUT"
 ls -1 "$OUT"

@@ -151,6 +151,19 @@ through `extra_material_refs`:
 **Text segments do not get a `speeds` material.** Getting this wrong is the
 single most common cause of a draft that opens empty.
 
+### `audio_fades` material — audio fades live in their own bucket
+
+A fade is **not** a field on the segment. It is a separate material in the
+`audio_fades` bucket, referenced through `extra_material_refs`:
+
+```json
+{ "id": "<uuid>", "fade_in_duration": 1000000, "fade_out_duration": 1000000,
+  "fade_type": 0, "type": "audio_fade" }
+```
+
+A segment with a fade therefore carries **two** entries in
+`extra_material_refs`: its speed material and its fade material.
+
 ### Text material — `content` is a stringified JSON
 
 ```json
@@ -179,6 +192,38 @@ upstream expression exactly.
 
 `alignment` defaults to `0` (left).
 
+**`check_flag` is a bitmask** of the effects a text material carries:
+
+| Bit | Meaning |
+|---|---|
+| `7` | base, always set |
+| `8` | has a border (outline) |
+| `16` | has a background |
+| `32` | has a shadow |
+
+So a plain text run is `check_flag: 7` with an empty `strokes` array; a run
+with a black outline is `check_flag: 15`.
+
+The material `type` is `"subtitle"` only when the style enables auto-wrapping
+(`auto_wrapping: true`); otherwise it is `"text"`. The reference
+implementation does not enable auto-wrapping, so subtitles created through it
+are `"text"` as well.
+
+### Two text presets
+
+The upstream library exposes the raw defaults; the upstream *skill* wraps
+them with a caption look. This project keeps the two cases separate:
+
+| | `jianying_add_text` | `jianying_add_subtitles` |
+|---|---|---|
+| size | 8.0 | 5.0 |
+| outline | none | black, width 40 (→ `0.08000000000000002`) |
+| `clip.transform.y` | `0.0` | `-0.8` |
+| material `type` | `"text"` | `"text"` |
+
+Plain text uses the library defaults. Captions get the smaller outlined style
+and sit low on the canvas, which is where JianYing places imported subtitles.
+
 ---
 
 ## 3. `tracks` and segments
@@ -189,11 +234,36 @@ upstream expression exactly.
   "flag": 0,
   "id": "<uuid>",
   "is_default_name": false,
-  "name": "",
+  "name": "VideoTrack",
   "segments": [ ... ],
   "type": "video" | "audio" | "text"
 }
 ```
+
+### `attribute` is the mute flag, not a track index
+
+This is the easiest field to get wrong. In the schema:
+
+- `attribute` = `int(mute)` — it is `0` for every track that is not muted.
+- The **stacking order** is `render_index`, not `attribute`.
+
+Track names are what distinguish two tracks of the same type. The reference
+implementation names the first track of each type `VideoTrack`, `Audio` and
+`Subtitles`.
+
+### Base render index per track type
+
+`render_index` = the type's base index + the track's relative index among
+tracks of that type:
+
+| Track type | Base render index |
+|---|---|
+| video | 0 |
+| audio | 0 |
+| text | 15000 |
+
+The reference implementation leaves the relative index at 0, so every track of
+a type shares its base index — only text differs, at 15000.
 
 ### Segment serialization differs per track type
 
@@ -246,24 +316,93 @@ Why text differs:
 
 ### `extra_material_refs`
 
-Points at the `speeds` material for this segment (media segments only).
+Points at the `speeds` material for this segment, and at the `audio_fade`
+material when the segment has a fade.
+
+### Clip speed
+
+`duration` is the length of the **timeline slot**. How much source material
+that consumes depends on the speed:
+
+| Inputs | source range | target range | speed |
+|---|---|---|---|
+| `duration` only | `duration × speed` | `duration` | as given |
+| `duration` + `speed` | `duration × speed` | `duration` | as given |
+| `sourceStart` only | rest of the file | rest of the file | 1 |
+
+With `speed: 2` and `duration: 2s`, the clip occupies 2 seconds on the
+timeline and consumes 4 seconds of source material.
 
 ---
 
-## 4. Verification
+## 4. Validation rules the reference implementation enforces
 
-The implementation in `src/draft.ts` is validated against the upstream
-reference implementation by `scripts/compare_drafts.py`, which normalises
-UUIDs, MD5s and timestamps, then diffs the two drafts field by field.
+These are not optional. A draft that violates them opens incorrectly or
+renders unpredictably, so this project rejects them up front rather than
+producing a broken file.
+
+| Rule | Error |
+|---|---|
+| Two segments on the same track may not overlap | `SegmentOverlap` |
+| A source range may not exceed the media duration | `ValueError` |
+| A file with a video track may not be used as an audio material | `ValueError` |
+| Adjacent segments (one ends exactly where the next begins) are valid | — |
+
+Overlap is computed as `not (a.end <= b.start or b.end <= a.start)`, so
+touching segments do not overlap.
+
+---
+
+## 5. Media classification
+
+A still image exposes a video stream but reports no duration. The reference
+implementation falls back to **10 seconds** and keeps the material classified
+as `video`, so PNG and other images land in the `videos` bucket, not `images`.
+
+An image with no decodable stream at all is treated as a `photo` with a
+3-hour duration.
+
+---
+
+## 6. Verification
+
+The implementation in `src/draft.ts` is validated in three layers.
+
+### Layer 1 — end-to-end functional suite
 
 ```bash
-# 1. Generate the upstream oracle draft
+bash scripts/make_test_media.sh
+node dist/verify.js
+```
+
+Drives the server over raw JSON-RPC and asserts the contract end to end:
+tool surface, draft lifecycle, on-disk layout, segment serialization,
+referential integrity, error handling and the safety guards.
+
+### Layer 2 — differential scenarios against the reference library
+
+```bash
+export JY_UPSTREAM_SKILL=/path/to/jianying-editor-skill
+export JY_UPSTREAM_PYTHON=/path/to/python-with-pymediainfo
+node dist/diff_scenarios.js "$JY_UPSTREAM_SKILL" ./test-media ./diff_scenarios
+```
+
+Each scenario is generated twice — once by the reference `pyJianYingDraft`
+library and once by this server — and the two drafts are diffed field by
+field. The reference is the **underlying library**, not the wrapper skill,
+because the wrapper silently drops clip speed, audio fades and out-of-range
+validation.
+
+Covered scenarios: still images, clip speed, source offsets, multiple tracks,
+audio fades, exact boundary durations, text styles, caption styles,
+overlapping clips, out-of-range durations, video-as-audio, adjacent clips and
+the removal of media.
+
+### Layer 3 — full-draft diff against the wrapper skill
+
+```bash
 python3 scripts/gen_upstream_same.py
-
-# 2. Generate the same draft through this MCP server
 node dist/gen_compare.js ./compare_drafts/mcp
-
-# 3. Diff them
 python3 scripts/compare_drafts.py \
     compare_drafts/upstream/Compare_Up \
     compare_drafts/mcp/Compare_Mcp
@@ -272,9 +411,23 @@ python3 scripts/compare_drafts.py \
 Current result: **0 structural differences**, matching track layout and
 matching segment timing.
 
-The first implementation attempt produced **62** differences, including the
-missing `speeds` materials, the wrong per-type segment fields, the wrong
-`render_index`, and two misspelled material buckets.
+The first implementation attempt produced **62** differences. A later review
+against the reference library found **8 more** in areas the basic comparison
+never reached — the missing `speeds` materials, the wrong per-type segment
+fields, the wrong `render_index`, two misspelled material buckets, inverted
+clip-speed semantics, and `attribute` being used as a track index instead of
+a mute flag. All of them are fixed.
+
+### Probing the reference contract directly
+
+```bash
+python3 scripts/probe_upstream_contract.py
+```
+
+Prints the reference library's actual behaviour for multi-track render
+indices, clip speed, audio fades, out-of-range durations, overlap, image
+classification and audio material validation. Use it to re-check any rule
+before changing the engine.
 
 ---
 

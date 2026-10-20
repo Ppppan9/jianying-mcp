@@ -40,3 +40,36 @@ jobs:
 
       - name: Check that the Plugin Skill matches the source Skill
         run: diff -u skills/jianying-editor/SKILL.md plugin/skills/jianying-editor/SKILL.md
+
+  differential:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Python dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq ffmpeg python3-pip
+          python3 -m pip install --break-system-packages pymediainfo
+
+      - name: Generate synthetic test media
+        run: bash scripts/make_test_media.sh
+
+      - name: Clone the reference implementation
+        run: |
+          git clone --depth 1 https://github.com/luoluoluo22/jianying-editor-skill \
+            /tmp/jianying-editor-skill
+          echo "JY_UPSTREAM_SKILL=/tmp/jianying-editor-skill" >> "$GITHUB_ENV"
+
+      - name: Build
+        run: npm run build
+
+      - name: Differential scenarios against the reference library
+        run: node dist/diff_scenarios.js "$JY_UPSTREAM_SKILL" ./test-media ./diff_scenarios

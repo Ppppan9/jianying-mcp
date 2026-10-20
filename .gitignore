@@ -9,6 +9,7 @@ dist/
 
 # Test and comparison artifacts
 compare_drafts/
+diff_scenarios/
 out_drafts/
 verify_drafts*/
 final_verify/
