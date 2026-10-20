@@ -89,7 +89,19 @@ jianying_add_subtitles  name=...  script="字幕内容"  start=0.5  duration=15 
 jianying_add_text      name=...  text="3秒上头"  start=0.2  duration=2.5  track=1
 ```
 
-### 6. 保存 + 验收
+### 6. 移除素材
+
+```bash
+jianying_remove_media  name=...  filePath=/abs/bgm.mp3
+```
+
+按**源文件路径**移除：引用这个文件的所有片段（视频/音频轨都算）一起删掉，孤儿素材也会顺手清干净。
+
+- 要删的是**一个文件的所有片段**，不是某一个片段 —— 同一个文件加过两次就会一次删光
+- 素材换了位置就用新路径再调一次；工具找不到匹配就**什么都不做**，不会误删同名文件
+- 删完记得重新 `jianying_inspect_draft` 看一眼时长对不对
+
+### 7. 保存 + 验收
 
 ```bash
 jianying_save_draft     name=...
@@ -98,7 +110,7 @@ jianying_inspect_draft  name=...
 
 保存后草稿立刻出现在剪映首页的工程列表里。
 
-### 7. 收工
+### 8. 收工
 
 ```bash
 jianying_close_draft    name=...

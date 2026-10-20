@@ -186,6 +186,9 @@ node dist/protocol_check.js
 
 # 6. the suite must be able to fail
 node dist/mutation_check.js ./test-media
+
+# 7. the documented calls have to work
+node dist/docs_check.js
 ```
 
 ```
@@ -197,6 +200,7 @@ node dist/mutation_check.js ./test-media
 [5] guard_coverage.js  Guards: 34 enforced, 0 not enforced
 [6] protocol_check.js   Protocol: 34 passed, 0 failed
 [7] mutation_check.js   Mutations: 26 of 26 caught, 0 survived
+[8] docs_check.js      Documentation: 40 passed, 0 failed
 ```
 
 The fifth suite is a different question from the others: not "does the draft
@@ -212,6 +216,14 @@ reply — the caller waited forever for an answer that never came.
 The seventh suite is the one that keeps the other six honest. It breaks the
 engine on purpose, one rule at a time, and the suite has to notice. A green
 suite proves nothing until you know it can go red.
+
+The eighth suite makes the documentation executable. Every call the Skill
+file and this README show is sent to the server, and it has to come back
+without an argument complaint — the agent follows the documentation, so a
+documented call that the server refuses is a documented call that does not
+work. It also checks that every tool the server offers is mentioned in the
+Skill file; `jianying_remove_media` was missing entirely, so the agent had
+no idea it existed.
 
 The differential harness also runs a **load → save round trip**: a draft
 seeded with effects, stickers, transitions and a media bin is opened, saved
@@ -397,6 +409,7 @@ redistributed here.
 [5] guard_coverage.js  Guards: 34 enforced, 0 not enforced
 [6] protocol_check.js   Protocol: 34 passed, 0 failed
 [7] mutation_check.js   Mutations: 26 of 26 caught, 0 survived
+[8] docs_check.js      Documentation: 40 passed, 0 failed
 ```
 
 The fifth suite is a different question from the others: not "does the draft

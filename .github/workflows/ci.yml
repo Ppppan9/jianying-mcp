@@ -36,6 +36,9 @@ jobs:
       - name: Protocol check — a request that arrives must get an answer
         run: node dist/protocol_check.js ./test-media
 
+      - name: Documentation check — the documented calls have to work
+        run: node dist/docs_check.js
+
       - name: Generate the hands-on verification drafts
         run: node dist/make_verify_drafts.js ./verify-media ./verify-drafts
 

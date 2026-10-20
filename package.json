@@ -17,7 +17,8 @@
     "sync-plugin": "cp dist/server.js dist/draft.js dist/schema_validate.js plugin/server/ && cp skills/jianying-editor/SKILL.md plugin/skills/jianying-editor/SKILL.md",
     "guards": "node dist/guard_coverage.js",
     "protocol": "node dist/protocol_check.js ./test-media",
-    "check": "npm run build && npm run sync-plugin && git diff --exit-code plugin/ && node dist/verify.js && node dist/protocol_check.js ./test-media && node dist/guard_coverage.js ./test-media ./out_drafts/guards",
+    "docs": "node dist/docs_check.js",
+    "check": "npm run build && npm run sync-plugin && git diff --exit-code plugin/ && node dist/verify.js && node dist/protocol_check.js ./test-media && node dist/guard_coverage.js ./test-media ./out_drafts/guards && node dist/docs_check.js",
     "verify-drafts": "node dist/make_verify_drafts.js",
     "mutation": "node dist/mutation_check.js"
   },

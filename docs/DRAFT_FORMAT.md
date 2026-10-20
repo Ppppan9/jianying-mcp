@@ -566,7 +566,7 @@ new one.
 
 ## 7. Verification
 
-The implementation in `src/draft.ts` is validated in seven layers.
+The implementation in `src/draft.ts` is validated in eight layers.
 
 ### Layer 1 — end-to-end functional suite
 
@@ -661,6 +661,23 @@ Breaks the engine on purpose, one rule at a time, and requires the suite to
 notice. A green suite proves nothing until you know it can go red. A
 mutation whose snippet no longer matches the source **fails the run** — it
 is a check that never ran, not a passing one.
+
+### Layer 8 — documentation check
+
+```bash
+node dist/docs_check.js
+```
+
+Sends every call the Skill file and the README show to the server and
+requires it to come back without an argument complaint. The agent follows
+the documentation, so a documented call the server refuses is a documented
+call that does not work. The check also requires every tool the server
+offers to be mentioned in the Skill file.
+
+The check has to reach the engine's own validation, so it opens a draft
+first and points the placeholder paths at real media. Without that, every
+call stops at "no open draft" and a wrong value in the documentation is
+never noticed.
 
 ---
 
