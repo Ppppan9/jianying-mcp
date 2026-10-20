@@ -44,6 +44,11 @@ jobs:
 
       - name: Verify the Plugin bundle matches the build output
         run: |
+          # Syncing first and then checking the working tree catches a stale
+          # bundle: if the committed copy differs from what the build
+          # produces, the sync changes it and git notices.
+          npm run sync-plugin
+          git diff --exit-code plugin/
           diff -u dist/server.js plugin/server/server.js
           diff -u dist/draft.js  plugin/server/draft.js
           diff -u dist/schema_validate.js plugin/server/schema_validate.js
