@@ -12,7 +12,8 @@
  * one structured result back.
  */
 import fs from "node:fs";
-import { Draft, formatSrtTime, listDrafts, parseSeconds, probeMedia, resolveDraftsRoot, splitSubtitleLines } from "./draft.js";
+import path from "node:path";
+import { Draft, formatSrtTime, listDrafts, parseSeconds, probeMedia, resolveDraftsRoot, sanitizeDraftName, splitSubtitleLines, } from "./draft.js";
 const PROTOCOL_VERSION = "2024-11-05";
 const SERVER_INFO = { name: "jianying-mcp", version: "1.0.0" };
 /**
@@ -29,9 +30,10 @@ const sessions = new Map();
  */
 const MAX_OPEN_DRAFTS = 32;
 function requireSession(name) {
-    const draft = sessions.get(name);
+    const key = sessionKey(name);
+    const draft = sessions.get(key);
     if (!draft) {
-        throw new Error(`No open draft named "${name}". Call jianying_open_draft (or jianying_create_draft) first. Open drafts: ${[...sessions.keys()].join(", ") || "(none)"}`);
+        throw new Error(`No open draft named "${key}". Call jianying_open_draft (or jianying_create_draft) first. Open drafts: ${[...sessions.keys()].join(", ") || "(none)"}`);
     }
     return draft;
 }
@@ -52,6 +54,43 @@ function registerSession(draft) {
             `Close some with jianying_close_draft before opening more.`);
     }
     sessions.set(draft.name, draft);
+}
+/**
+ * Refuses to open a name that is already in use, before any file is touched.
+ */
+function assertNameAvailable(name) {
+    const key = sessionKey(name);
+    if (sessions.has(key)) {
+        throw new Error(`Draft "${key}" is already open in this session. ` +
+            `Close it first with jianying_close_draft, or use a different name.`);
+    }
+    if (sessions.size >= MAX_OPEN_DRAFTS) {
+        throw new Error(`Too many drafts are open (limit ${MAX_OPEN_DRAFTS}). ` +
+            `Close some with jianying_close_draft before opening more.`);
+    }
+}
+/**
+ * The key a draft is registered under.
+ *
+ * Draft names are sanitised on the way in (a name like "My Draft: v2" becomes
+ * "My Draft_ v2" because a colon is illegal in a file name). Sessions must be
+ * looked up under the same key, otherwise the caller cannot address the
+ * draft it just created with the name it used.
+ */
+function sessionKey(name) {
+    return sanitizeDraftName(name);
+}
+/**
+ * Normalises a track index.
+ *
+ * The engine truncates a fractional index, so the append position must be
+ * computed against the same index the engine will actually use.
+ */
+function trackIndex(value) {
+    const n = Number(value);
+    if (!Number.isFinite(n))
+        return 0;
+    return Math.max(0, Math.trunc(n));
 }
 const S = {
     string: (description, extra = {}) => ({ type: "string", description, ...extra }),
@@ -102,6 +141,8 @@ const TOOLS = [
             fps: S.number("Frame rate (default 30)"),
         }, ["name"]),
         handler: (args) => {
+            // Refuse before touching the filesystem.
+            assertNameAvailable(args.name);
             const draft = new Draft({
                 name: args.name,
                 width: args.width,
@@ -123,15 +164,19 @@ const TOOLS = [
             height: S.number("Canvas height"),
             fps: S.number("Frame rate (default 30)"),
             draftsRoot: S.string("Override the drafts root directory"),
+            overwrite: S.boolean("Replace an existing draft with the same name. Off by default, because overwriting discards the existing project."),
         }, ["name"]),
         handler: (args) => {
+            // Check for a conflicting session *before* touching the filesystem, so
+            // a rejected call can never delete the draft that is already open.
+            assertNameAvailable(args.name);
             const draft = new Draft({
                 name: args.name,
                 width: args.width,
                 height: args.height,
                 fps: args.fps,
                 draftsRoot: resolveDraftsRoot(args.draftsRoot),
-                overwrite: true,
+                overwrite: args.overwrite ?? false,
             });
             registerSession(draft);
             return { ok: true, draft: draft.summary() };
@@ -144,19 +189,20 @@ const TOOLS = [
             name: S.string("Open draft name"),
         }, ["name"]),
         handler: (args) => {
-            const draft = sessions.get(args.name);
+            const key = sessionKey(args.name);
+            const draft = sessions.get(key);
             if (!draft) {
                 return {
                     ok: true,
                     closed: false,
-                    message: `No open draft named "${args.name}".`,
+                    message: `No open draft named "${key}".`,
                 };
             }
-            sessions.delete(args.name);
+            sessions.delete(key);
             return {
                 ok: true,
                 closed: true,
-                name: args.name,
+                name: key,
                 draftPath: draft.dir,
                 openDrafts: [...sessions.keys()],
                 note: "Any changes that were not saved with jianying_save_draft are discarded.",
@@ -195,7 +241,7 @@ const TOOLS = [
         handler: async (args) => {
             const draft = requireSession(args.name);
             const start = args.start === undefined
-                ? draft.trackDuration("video", args.track ?? 0)
+                ? draft.trackDuration("video", trackIndex(args.track))
                 : parseSeconds(args.start);
             const seg = await draft.addVideo({ ...args, start });
             return {
@@ -226,7 +272,12 @@ const TOOLS = [
         }, ["name", "filePath"]),
         handler: async (args) => {
             const draft = requireSession(args.name);
-            const seg = await draft.addAudio(args);
+            // Like the video tool, an omitted start appends after the current
+            // content of the track.
+            const start = args.start === undefined
+                ? draft.trackDuration("audio", trackIndex(args.track))
+                : parseSeconds(args.start);
+            const seg = await draft.addAudio({ ...args, start });
             return {
                 ok: true,
                 segment: {
@@ -248,6 +299,7 @@ const TOOLS = [
             text: S.string("Text content"),
             start: S.duration("Start time"),
             duration: S.duration("Duration"),
+            track: S.number("Text track index (0 = captions, 1 = titles/overlays)"),
             style: S.object("Text style", textStyleProperties),
         }, ["name", "text", "start", "duration"]),
         handler: (args) => {
@@ -273,12 +325,17 @@ const TOOLS = [
             start: S.duration("Start time"),
             duration: S.duration("Total window"),
             maxChars: S.number("Max characters per line (default 18)"),
+            track: S.number("Text track index (0 = captions, 1 = titles/overlays)"),
             style: S.object("Text style", textStyleProperties),
         }, ["name", "script", "start", "duration"]),
         handler: (args) => {
             const draft = requireSession(args.name);
             const lines = splitSubtitleLines(args.script, args.maxChars ?? 18);
-            const segs = draft.addSubtitles(args.script, parseSeconds(args.start), parseSeconds(args.duration), { maxChars: args.maxChars ?? 18, style: args.style });
+            const segs = draft.addSubtitles(args.script, parseSeconds(args.start), parseSeconds(args.duration), {
+                maxChars: args.maxChars ?? 18,
+                style: args.style,
+                track: args.track ?? 0,
+            });
             return {
                 ok: true,
                 lineCount: lines.length,
@@ -340,29 +397,53 @@ const TOOLS = [
         inputSchema: S.object("Export subtitles as SRT", {
             name: S.string("Open draft name"),
             outputPath: S.string("Absolute path of the .srt file to write"),
+            overwrite: S.boolean("Replace an existing file (default false)"),
         }, ["name", "outputPath"]),
         handler: (args) => {
             const draft = requireSession(args.name);
+            // Guard the write: the path comes from the caller, and silently
+            // replacing a video or a source file with subtitle text would destroy
+            // the user's material.
+            const outputPath = path.resolve(args.outputPath);
+            if (path.extname(outputPath).toLowerCase() !== ".srt") {
+                throw new Error(`Refusing to write "${outputPath}": the output path must end in .srt.`);
+            }
+            if (fs.existsSync(outputPath) && !args.overwrite) {
+                throw new Error(`Refusing to overwrite the existing file "${outputPath}". ` +
+                    `Pass overwrite=true to replace it.`);
+            }
             const info = draft.buildDraftInfo();
             const texts = info.materials.texts ?? [];
-            const textTrack = info.tracks.find((t) => t.type === "text");
-            const segs = textTrack?.segments ?? [];
+            // Every text track is exported, not just the first one: a title on a
+            // second track would otherwise be silently dropped.
+            const textTracks = info.tracks.filter((t) => t.type === "text");
+            const cues = [];
+            for (const track of textTracks) {
+                for (const seg of track.segments ?? []) {
+                    const mat = texts.find((m) => m.id === seg.material_id);
+                    if (!mat)
+                        continue;
+                    const content = JSON.parse(mat.content);
+                    cues.push({
+                        start: seg.target_timerange.start / 1e6,
+                        end: (seg.target_timerange.start + seg.target_timerange.duration) / 1e6,
+                        text: content.text,
+                    });
+                }
+            }
+            // Sort by time so the SRT reads in timeline order.
+            cues.sort((a, b) => a.start - b.start);
             const lines = [];
             let index = 1;
-            for (const seg of segs) {
-                const mat = texts.find((m) => m.id === seg.material_id);
-                if (!mat)
-                    continue;
-                const content = JSON.parse(mat.content);
-                const start = seg.target_timerange.start / 1e6;
-                const end = (seg.target_timerange.start + seg.target_timerange.duration) / 1e6;
+            for (const cue of cues) {
                 lines.push(String(index++));
-                lines.push(`${formatSrtTime(start)} --> ${formatSrtTime(end)}`);
-                lines.push(content.text);
+                lines.push(`${formatSrtTime(cue.start)} --> ${formatSrtTime(cue.end)}`);
+                lines.push(cue.text);
                 lines.push("");
             }
-            fs.writeFileSync(args.outputPath, lines.join("\n"), "utf8");
-            return { ok: true, outputPath: args.outputPath, cueCount: index - 1 };
+            fs.mkdirSync(path.dirname(outputPath), { recursive: true });
+            fs.writeFileSync(outputPath, lines.join("\n"), "utf8");
+            return { ok: true, outputPath, cueCount: index - 1 };
         },
     },
     {
@@ -482,9 +563,21 @@ async function dispatch(id, method, params) {
     }
 }
 let buffer = "";
+/**
+ * Cap on the unterminated-line buffer.
+ *
+ * A peer that sends data without a newline would otherwise grow the buffer
+ * without bound. Real requests are far smaller than this.
+ */
+const MAX_BUFFER_BYTES = 16 * 1024 * 1024;
 process.stdin.setEncoding("utf8");
 process.stdin.on("data", (chunk) => {
     buffer += chunk;
+    if (buffer.length > MAX_BUFFER_BYTES) {
+        process.stderr.write(`jianying-mcp: input buffer exceeded ${MAX_BUFFER_BYTES} bytes without a newline; dropping the connection.\n`);
+        buffer = "";
+        process.exit(1);
+    }
     let index;
     while ((index = buffer.indexOf("\n")) >= 0) {
         const line = buffer.slice(0, index).trim();

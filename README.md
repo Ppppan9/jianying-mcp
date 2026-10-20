@@ -87,28 +87,39 @@ npm run build
 | `jianying_list_drafts` | List drafts with duration and canvas size |
 | `jianying_add_video` | Add a video/image clip to a video track |
 | `jianying_add_audio` | Add BGM / voiceover / SFX to an audio track |
-| `jianying_add_text` | Add a title or a single caption |
+| `jianying_add_text` | Add a title or a single caption (use `track: 1` so it can coexist with captions) |
 | `jianying_add_subtitles` | Add a full subtitle track from a script (~18 chars/line) |
-| `jianying_remove_media` | Remove every clip referencing a media file |
+| `jianying_remove_media` | Remove every clip referencing a media file, plus its orphaned materials |
 | `jianying_save_draft` | Write the draft to disk |
-| `jianying_inspect_draft` | Structured timeline summary — the acceptance check |
-| `jianying_export_srt` | Export the text track as SRT |
+| `jianying_inspect_draft` | Structured timeline summary with caption text — the acceptance check |
+| `jianying_export_srt` | Export every text track as SRT |
 | `jianying_probe_media` | Probe duration / resolution / type of a media file |
 | `jianying_close_draft` | Close an open draft and release its memory |
 
 ### Guards
 
-The server refuses to produce a broken draft. Each of these raises an
-error instead of writing a file JianYing would mis-render:
+The server refuses to produce a broken draft, and refuses to destroy anything
+it was not asked to destroy. Each of these raises an error instead of
+silently writing a bad file:
 
 - **Overlapping clips** on the same track are rejected (adjacent clips are
   fine).
 - **Source ranges beyond the media duration** are rejected.
-- **A file with a video track cannot be used as an audio material.**
+- **A file with a video track cannot be used as an audio material**, and an
+  audio-only file cannot be used as a video material.
+- **Negative start times, durations and fades** are rejected.
 - **Re-opening an already open draft** is refused, so an unsaved timeline is
   never silently discarded.
+- **Creating a draft whose name already exists on disk** is refused unless
+  `overwrite: true` is passed explicitly.
 - **Overwriting a directory that is not a draft** is refused.
 - **Unsafe draft names** (`..`, `.`, Windows device names) are rejected.
+- **`export_srt` refuses to overwrite an existing file** and refuses a
+  non-`.srt` output path — the path comes from the caller and could point at
+  source media.
+
+A rejected call leaves nothing behind: no orphan material, no copied media
+in the draft.
 
 ---
 
@@ -169,7 +180,7 @@ python3 scripts/compare_drafts.py \
 ```
 
 ```
-[1] verify.js            Result: 70 passed, 0 failed
+[1] verify.js            Result: 87 passed, 0 failed
 [2] diff_scenarios.js    Scenarios: 12 matched, 0 differed
 [3] compare_drafts.py    [A] Structural diff: 0 difference(s)
                          VERDICT: PASS
@@ -181,13 +192,21 @@ speed, audio fades and out-of-range validation. It covers still images, clip
 speed, source offsets, multiple tracks, audio fades, boundary durations, text
 and caption styles, overlaps, out-of-range requests and media removal.
 
-The first implementation attempt produced **62** differences. A later review
-against the reference library found **8 more** in areas the basic comparison
-never reached — the missing `speeds` materials, wrong per-type segment
-fields, a wrong `render_index`, two misspelled material buckets, inverted
-clip-speed semantics, and `attribute` being used as a track index instead of
-a mute flag. The full contract, including every rule this project enforces,
-is in [`docs/DRAFT_FORMAT.md`](docs/DRAFT_FORMAT.md).
+The implementation went through two review rounds. The first comparison
+produced **62** differences. A differential review against the reference
+library found **8 more** in areas the basic comparison never reached — the
+missing `speeds` materials, wrong per-type segment fields, a wrong
+`render_index`, two misspelled material buckets, inverted clip-speed
+semantics, and `attribute` being used as a track index instead of a mute
+flag. A second, adversarial review found **21 further issues**, of which the
+substantive ones were: `create_draft` deleting an existing draft before
+refusing to open it, the media cache letting a video track reference an
+audio material, `ms` being parsed as minutes, a non-idempotent name
+sanitisation that made a draft unaddressable, cover art being mistaken for a
+video track, and `export_srt` overwriting whatever file it was pointed at.
+
+The full contract, including every rule now enforced, is in
+[`docs/DRAFT_FORMAT.md`](docs/DRAFT_FORMAT.md).
 
 `scripts/probe_upstream_contract.py` prints the reference library's actual
 behaviour for each rule — use it to re-check anything before changing the
@@ -291,10 +310,21 @@ redistributed here.
 
 - 同轨道**片段重叠**被拒绝（相邻不算重叠）
 - **源时长超出素材**被拒绝
-- **含视频轨的文件不能当音频素材**
+- **含视频轨的文件不能当音频素材**，**纯音频文件也不能当视频素材**
+- **负数的起点 / 时长 / 淡入淡出**被拒绝
 - **重复打开同名草稿**被拒绝，避免未保存的时间轴被静默丢弃
+- **磁盘上已有同名草稿**时不会自动覆盖，必须显式传 `overwrite=true`
 - **覆盖非草稿目录**被拒绝
 - **危险草稿名**（`..`、`.`、Windows 设备名）被拒绝
+- **SRT 导出不会覆盖已有文件**，也**拒绝非 `.srt` 路径**（路径可能指向你的源素材）
+
+被拒绝的调用**不会留下垃圾**：不残留孤儿素材，也不残留复制进草稿的素材文件。
+
+### 验证过程
+
+实现经过两轮审查。第一轮逐字段比对发现 **62 处**差异；对着底层库做差分复审又挖出 **8 处**之前没覆盖到的（`speeds` 材质缺失、按轨道类型的段字段写错、`render_index` 不对、两个素材桶名拼错、变速语义写反、把 `attribute` 当成轨道编号）。第二轮对抗式审查再发现 **21 项**问题，其中实质性的是：`create_draft` 在拒绝打开前先删掉已有草稿、媒体缓存让视频轨引用到音频素材、`ms` 被解析成分钟、名字净化不幂等导致草稿无法被寻址、封面图被误判成视频轨、以及 `export_srt` 会覆写它被指向的任意文件。
+
+完整契约见 [`docs/DRAFT_FORMAT.md`](docs/DRAFT_FORMAT.md)。
 
 ### 已知限制
 

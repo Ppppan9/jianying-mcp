@@ -77,6 +77,11 @@ export interface MediaProbe {
   width: number;
   height: number;
   kind: "video" | "audio";
+  /**
+   * True when the file is a still image. A still image has no intrinsic
+   * length, so it can be placed on the timeline for any duration.
+   */
+  stillImage?: boolean;
 }
 
 export interface Segment {
@@ -119,6 +124,11 @@ export interface TextSpec {
   style?: Partial<TextStyle>;
   /** Use the caption defaults (smaller size, outline, low on the canvas). */
   subtitle?: boolean;
+  /**
+   * Text track index. 0 is the caption track; use 1 for titles or overlays
+   * so they can coexist with the captions.
+   */
+  track?: number;
 }
 
 export interface AudioSpec {
@@ -154,7 +164,14 @@ export interface EffectSpec {
 // Time helpers
 // ---------------------------------------------------------------------------
 
-/** Accepts "1.5", "90s", "1m30s", or a number of seconds. Returns seconds. */
+/**
+ * Accepts "1.5", "90s", "1m30s", "500ms", or a number of seconds.
+ * Returns seconds.
+ *
+ * The unit alternation lists "ms" before "m", because a regex alternation
+ * matches the first alternative that fits — with "m" first, "500ms" would be
+ * read as 500 minutes.
+ */
 export function parseSeconds(value: string | number | undefined, fallback = 0): number {
   if (value === undefined || value === null) return fallback;
   if (typeof value === "number") return value;
@@ -163,7 +180,7 @@ export function parseSeconds(value: string | number | undefined, fallback = 0): 
   if (/^-?\d+(\.\d+)?$/.test(raw)) return Number(raw);
 
   let total = 0;
-  const re = /(\d+(?:\.\d+)?)\s*(h|m|s|ms)/gi;
+  const re = /(\d+(?:\.\d+)?)\s*(ms|h|m|s)/gi;
   let matched = false;
   let m: RegExpExecArray | null;
   while ((m = re.exec(raw)) !== null) {
@@ -185,7 +202,31 @@ export function parseSeconds(value: string | number | undefined, fallback = 0): 
     }
   }
   if (!matched) throw new Error(`Cannot parse duration: ${raw}`);
-  return total;
+
+  // A leading minus applies to the whole expression.
+  return raw.startsWith("-") ? -total : total;
+}
+
+/**
+ * Parses a duration and rejects negative or non-finite results.
+ *
+ * A negative timerange is not something JianYing can represent, so it is
+ * refused rather than written into the draft.
+ */
+export function parseDuration(
+  value: string | number | undefined,
+  fallback: number | undefined,
+  label: string,
+): number | undefined {
+  if (value === undefined || value === null) return fallback;
+  const seconds = parseSeconds(value, fallback ?? 0);
+  if (!Number.isFinite(seconds)) {
+    throw new Error(`Invalid ${label}: ${value}`);
+  }
+  if (seconds < 0) {
+    throw new Error(`Invalid ${label}: ${value} must not be negative.`);
+  }
+  return seconds;
 }
 
 /** Formats seconds as SRT timestamp (HH:MM:SS,mmm). */
@@ -214,15 +255,42 @@ export function splitSubtitleLines(script: string, maxChars = 18): string[] {
     let current = "";
     const tokens = para.match(/[^。！？!?；;，,、]+[。！？!?；;，,、]?/g) ?? [para];
     for (const token of tokens) {
-      if (current.length + token.length <= maxChars) {
-        current += token;
-      } else {
-        if (current) out.push(current);
-        current = token;
+      // A token longer than the limit is split further, so a run-on sentence
+      // without punctuation still produces readable lines.
+      const pieces =
+        token.length > maxChars ? hardSplit(token, maxChars) : [token];
+      for (const piece of pieces) {
+        if (current.length + piece.length <= maxChars) {
+          current += piece;
+        } else {
+          if (current) out.push(current);
+          current = piece;
+        }
       }
     }
     if (current) out.push(current);
   }
+  return out;
+}
+
+/**
+ * Splits a run of text into pieces of at most `maxChars` characters.
+ *
+ * The split prefers a space for latin text and falls back to a hard cut for
+ * scripts without word separators.
+ */
+function hardSplit(text: string, maxChars: number): string[] {
+  const out: string[] = [];
+  let rest = text;
+  while (rest.length > maxChars) {
+    let cut = maxChars;
+    // Prefer breaking at a space so words stay intact.
+    const space = rest.lastIndexOf(" ", maxChars);
+    if (space > maxChars * 0.5) cut = space + 1;
+    out.push(rest.slice(0, cut).trimEnd());
+    rest = rest.slice(cut);
+  }
+  if (rest) out.push(rest);
   return out;
 }
 
@@ -237,12 +305,13 @@ const IMAGE_EXTENSIONS = new Set([
 /**
  * Duration assigned to a still image that has no intrinsic duration.
  *
- * The upstream implementation falls back to 10 seconds when a probe cannot
- * determine a duration, and treats such files as video material. Matching
- * that keeps the produced draft consistent with drafts created by the
- * reference tooling.
+ * The upstream implementation gives an image a 3 hour material duration and
+ * a 10 second fallback when a probe cannot determine one. The long duration
+ * matters: a still image may be placed on the timeline for any length, and
+ * the segment's source range must fit inside the material's duration.
  */
 const STILL_IMAGE_DEFAULT_DURATION_US = 10_000_000;
+const STILL_IMAGE_MATERIAL_DURATION_US = 10_800_000_000;
 
 /**
  * Probes a media file for duration and dimensions.
@@ -253,6 +322,7 @@ export async function probeMedia(filePath: string): Promise<MediaProbe> {
   const abs = path.resolve(filePath);
   if (!fs.existsSync(abs)) throw new Error(`Media file not found: ${abs}`);
   const ext = path.extname(abs).toLowerCase();
+  const looksLikeImage = IMAGE_EXTENSIONS.has(ext);
 
   const probe = await tryFfprobe(abs);
   if (probe) {
@@ -262,12 +332,13 @@ export async function probeMedia(filePath: string): Promise<MediaProbe> {
     return probe;
   }
 
-  if (IMAGE_EXTENSIONS.has(ext)) {
+  if (looksLikeImage) {
     return {
       duration: STILL_IMAGE_DEFAULT_DURATION_US,
       width: 1920,
       height: 1080,
       kind: "video",
+      stillImage: true,
     };
   }
 
@@ -312,23 +383,42 @@ async function tryFfprobe(abs: string): Promise<MediaProbe | null> {
     );
     const data = JSON.parse(stdout);
     const streams: any[] = data.streams ?? [];
-    const video = streams.find((s) => s.codec_type === "video");
+    const videoStreams = streams.filter((s) => s.codec_type === "video");
     const audio = streams.find((s) => s.codec_type === "audio");
+    // An mp3 with cover art exposes the artwork as a video stream. It is
+    // attached to the audio, not a picture the user can place on a timeline,
+    // so it must not be mistaken for the media's real video track.
+    const attached = new Set(
+      streams
+        .filter((s) => s.disposition?.attached_pic === 1)
+        .map((s) => s.index),
+    );
+    const realVideo = videoStreams.find((s) => !attached.has(s.index));
+    // When every video stream is cover art, the file is an audio file — the
+    // artwork belongs to the audio, it is not a placeable video.
+    const video = realVideo;
 
     let durationUs = 0;
+    // Prefer the audio duration for an audio file, then the video stream's,
+    // then the container's.
     const rawDur =
-      video?.duration ?? audio?.duration ?? data.format?.duration;
+      audio?.duration ?? video?.duration ?? data.format?.duration;
     if (rawDur) durationUs = Math.round(Number(rawDur) * US);
 
     if (video) {
       // A single-frame image exposes a video stream but reports no duration.
       // The upstream implementation falls back to 10 seconds and keeps the
       // material classified as video.
+      const ext = path.extname(abs).toLowerCase();
+      const isStill = IMAGE_EXTENSIONS.has(ext);
       return {
         duration: durationUs > 0 ? durationUs : STILL_IMAGE_DEFAULT_DURATION_US,
         width: Number(video.width) || 1920,
         height: Number(video.height) || 1080,
         kind: "video",
+        // A still image may be placed on the timeline for any length; only its
+        // intrinsic duration is unknown.
+        stillImage: isStill && durationUs === 0,
       };
     }
     if (audio) {
@@ -427,10 +517,36 @@ export function resolveDraftsRoot(explicit?: string): string {
     );
   }
 
+  // Prefer a directory that already holds real drafts: that is the one
+  // JianYing itself reads. Simply picking the first directory that exists
+  // would lock onto an empty folder this tool created earlier.
+  for (const c of candidates) {
+    try {
+      if (!fs.existsSync(c)) continue;
+      const entries = fs.readdirSync(c);
+      const holdsDrafts = entries.some((n) => {
+        try {
+          return (
+            fs.statSync(path.join(c, n)).isDirectory() &&
+            fs.existsSync(path.join(c, n, "draft_info.json"))
+          );
+        } catch {
+          return false;
+        }
+      });
+      if (holdsDrafts) return c;
+    } catch {
+      /* unreadable candidate — try the next one */
+    }
+  }
+
+  // Otherwise fall back to the first candidate that already exists.
   for (const c of candidates) {
     if (fs.existsSync(c)) return c;
   }
-  // None exist yet — return the canonical first candidate so callers can create it.
+
+  // None exist yet — return the canonical first candidate so callers can
+  // create it.
   return candidates[0];
 }
 
@@ -446,8 +562,19 @@ export class Draft {
   private tracks: TrackState[] = [];
   private materials = new Map<string, MaterialEntry>();
   private materialOrder: MaterialEntry[] = [];
-  /** path -> { materialId, stagedName } */
-  private stagedMedia = new Map<string, { materialId: string; stagedName: string }>();
+  /**
+   * Media cache, keyed by `<kind>\0<absolute path>`.
+   * A file used as both video and audio needs two entries.
+   */
+  private stagedMedia = new Map<
+    string,
+    { materialId: string; stagedName: string }
+  >();
+  /** In-flight registrations, so concurrent calls share one material. */
+  private pendingMedia = new Map<
+    string,
+    Promise<{ materialId: string; probe: MediaProbe; stagedPath: string }>
+  >();
   /**
    * When the caller did not pick a canvas explicitly, the first video's
    * dimensions define the canvas — matching the upstream behaviour that
@@ -508,9 +635,10 @@ export class Draft {
    *
    * `relativeIndex` is the track's position among tracks of the same type.
    * In the JianYing schema the track's `attribute` field is the mute flag
-   * (always 0 here) and stacking order is carried by `render_index`. The
-   * upstream implementation gives every track of a type the same base render
-   * index, so the relative index only affects ordering in the track list.
+   * (always 0 here) and the stacking order is carried by `render_index`,
+   * which is the type's base index plus this relative index. Two tracks of
+   * the same type must therefore get different render indices, otherwise
+   * JianYing cannot tell them apart.
    */
   private ensureTrack(type: TrackState["type"], relativeIndex: number): TrackState {
     const index = Math.max(0, Math.trunc(relativeIndex));
@@ -521,8 +649,11 @@ export class Draft {
         type,
         index,
         segments: [],
-        renderIndex: TRACK_BASE_RENDER_INDEX[type],
-        name: index === 0 ? DEFAULT_TRACK_NAMES[type] : `${DEFAULT_TRACK_NAMES[type]}_${index}`,
+        renderIndex: TRACK_BASE_RENDER_INDEX[type] + index,
+        name:
+          index === 0
+            ? DEFAULT_TRACK_NAMES[type]
+            : `${DEFAULT_TRACK_NAMES[type]}_${index}`,
       };
       this.tracks.push(track);
       this.tracks.sort((a, b) => a.renderIndex - b.renderIndex);
@@ -579,11 +710,34 @@ export class Draft {
     const abs = path.resolve(filePath);
     if (!fs.existsSync(abs)) throw new Error(`Media file not found: ${abs}`);
 
-    const existing = this.stagedMedia.get(abs);
+    // The cache is keyed by path *and* kind. A file that is used both as a
+    // video and as an audio material needs two distinct material entries —
+    // sharing one would put an audio material on a video track.
+    const cacheKey = `${kind}\u0000${abs}`;
+
+    // An in-flight registration is reused, so two concurrent calls for the
+    // same file do not create duplicate materials.
+    const inFlight = this.pendingMedia.get(cacheKey);
+    if (inFlight) return inFlight;
+
+    const registration = this.registerMediaInternal(abs, kind, cacheKey);
+    this.pendingMedia.set(cacheKey, registration);
+    try {
+      return await registration;
+    } finally {
+      this.pendingMedia.delete(cacheKey);
+    }
+  }
+
+  private async registerMediaInternal(
+    abs: string,
+    kind: "video" | "audio",
+    cacheKey: string,
+  ): Promise<{ materialId: string; probe: MediaProbe; stagedPath: string }> {
     const probe = await probeMedia(abs);
 
+    const existing = this.stagedMedia.get(cacheKey);
     if (existing) {
-      const mat = this.materials.get(existing.materialId);
       return {
         materialId: existing.materialId,
         probe,
@@ -598,7 +752,7 @@ export class Draft {
     fs.copyFileSync(abs, stagedPath);
 
     const materialId = randomUUID().replace(/-/g, "");
-    this.stagedMedia.set(abs, { materialId, stagedName });
+    this.stagedMedia.set(cacheKey, { materialId, stagedName });
 
     if (kind === "audio") {
       this.addMaterial({
@@ -627,8 +781,7 @@ export class Draft {
       this.addMaterial({
         id: materialId,
         kind: "video",
-        data: {
-          audio_fade: null,
+        data: {          audio_fade: null,
           category_id: "",
           category_name: "local",
           check_flag: 63487,
@@ -640,7 +793,12 @@ export class Draft {
           },
           crop_ratio: "free",
           crop_scale: 1.0,
-          duration: probe.duration,
+          // A still image has no intrinsic length. The reference
+          // implementation gives it a 3 hour material duration so that a
+          // clip of any length still fits inside the material.
+          duration: probe.stillImage
+            ? STILL_IMAGE_MATERIAL_DURATION_US
+            : probe.duration,
           height: probe.height,
           id: materialId,
           local_material_id: stagedName.replace(/\.[^.]+$/, ""),
@@ -699,7 +857,18 @@ export class Draft {
 
   /** Adds a video or image clip to a video track. */
   async addVideo(spec: VideoSpec): Promise<Segment> {
-    const { materialId, probe } = await this.registerMedia(spec.filePath, "video");
+    const abs = path.resolve(spec.filePath);
+    if (!fs.existsSync(abs)) throw new Error(`Media file not found: ${abs}`);
+
+    // Probe before anything is written, so a rejected call leaves no staged
+    // copy and no orphaned material behind.
+    const probe = await probeMedia(abs);
+    if (probe.kind === "audio") {
+      throw new Error(
+        `Video material must not be an audio-only file: ${abs}`,
+      );
+    }
+
     const track = this.ensureTrack("video", spec.track ?? 0);
 
     // First video defines the canvas when the caller did not choose one.
@@ -711,47 +880,45 @@ export class Draft {
       this.resolutionResolved = true;
     }
 
-    const startUs = Math.round(parseSeconds(spec.start, 0) * US);
-    const sourceStartUs = Math.round(parseSeconds(spec.sourceStart, 0) * US);
+    const startUs = Math.round(parseDuration(spec.start, 0, "start time")! * US);
+    const sourceStartUs = Math.round(
+      parseDuration(spec.sourceStart, 0, "source start")! * US,
+    );
 
-    // Speed semantics follow the upstream VideoSegment constructor exactly:
+    // Speed semantics follow the upstream VideoSegment constructor:
     //
-    //   source range + speed given:
-    //       target = source duration / speed
-    //   source range given, no speed:
-    //       speed  = source duration / target duration
-    //       target = requested target duration
-    //   only a target duration given:
-    //       speed  = requested speed (default 1)
-    //       source = target duration * speed
+    //   `duration` given:
+    //       the timeline slot is `duration`, and `duration x speed` is
+    //       consumed from the source.
+    //   `duration` omitted:
+    //       the rest of the material is consumed from the source offset, and
+    //       the timeline slot is that length divided by the speed.
     //
-    // The caller may give either `duration` (target) or `sourceStart`
-    // (source offset); `duration` is always the timeline slot length.
-    const requestedTargetUs = Math.round(parseSeconds(spec.duration, 0) * US);
+    // The invariant `source = target x speed` always holds.
+    const requestedTargetUs = Math.round(
+      parseDuration(spec.duration, undefined, "duration")! * US || 0,
+    );
     const requestedSpeed = spec.speed ?? 1;
-    const hasSourceOffset = spec.sourceStart !== undefined;
+    if (!Number.isFinite(requestedSpeed) || requestedSpeed <= 0) {
+      throw new Error(`Invalid speed: ${spec.speed} must be greater than zero.`);
+    }
 
     let sourceUs: number;
     let targetUs: number;
     let effectiveSpeed: number;
 
     if (requestedTargetUs > 0) {
-      // `duration` is the timeline slot length.
       targetUs = requestedTargetUs;
       effectiveSpeed = requestedSpeed;
       sourceUs = Math.round(targetUs * effectiveSpeed);
-    } else if (hasSourceOffset) {
+    } else {
       // No explicit length: consume the rest of the material from the offset.
       sourceUs = Math.max(0, probe.duration - sourceStartUs);
-      targetUs = sourceUs;
-      effectiveSpeed = 1;
-    } else {
-      sourceUs = Math.max(0, probe.duration - sourceStartUs);
-      targetUs = sourceUs;
       effectiveSpeed = requestedSpeed;
+      targetUs = Math.round(sourceUs / effectiveSpeed);
     }
 
-    if (sourceStartUs + sourceUs > probe.duration + 1000) {
+    if (sourceStartUs + sourceUs > probe.duration + 1000 && !probe.stillImage) {
       throw new Error(
         `Requested range ${sourceStartUs / US}s..${(sourceStartUs + sourceUs) / US}s exceeds media duration ${probe.duration / US}s`,
       );
@@ -759,6 +926,9 @@ export class Draft {
 
     const targetRange: Timerange = { start: startUs, duration: targetUs };
     this.assertNoOverlap(track, targetRange, "video clip");
+
+    // Everything validated — now stage the file and register the material.
+    const { materialId } = await this.registerMedia(spec.filePath, "video");
 
     const seg: Segment = {
       id: randomUUID().replace(/-/g, ""),
@@ -777,23 +947,43 @@ export class Draft {
 
   /** Adds an audio clip (BGM, voiceover, SFX) to an audio track. */
   async addAudio(spec: AudioSpec): Promise<Segment> {
-    const { materialId, probe } = await this.registerMedia(spec.filePath, "audio");
-    const track = this.ensureTrack("audio", spec.track ?? 0);
+    const abs = path.resolve(spec.filePath);
+    if (!fs.existsSync(abs)) throw new Error(`Media file not found: ${abs}`);
+
+    // Probe and validate before anything is written.
+    const probe = await probeMedia(abs);
 
     // The upstream implementation refuses to treat a file with a video track
     // as an audio material; doing so produces a draft JianYing cannot read.
     if (probe.kind === "video") {
       throw new Error(
-        `Audio material must not contain a video track: ${path.resolve(spec.filePath)}`,
+        `Audio material must not contain a video track: ${abs}`,
       );
     }
 
-    const startUs = Math.round(parseSeconds(spec.start, 0) * US);
-    const sourceStartUs = Math.round(parseSeconds(spec.sourceStart, 0) * US);
+    const track = this.ensureTrack("audio", spec.track ?? 0);
+
+    const startUs = Math.round(parseDuration(spec.start, 0, "start time")! * US);
+    const sourceStartUs = Math.round(
+      parseDuration(spec.sourceStart, 0, "source start")! * US,
+    );
     const remaining = Math.max(0, probe.duration - sourceStartUs);
     const durationUs =
-      Math.round(parseSeconds(spec.duration, 0) * US) || remaining;
+      Math.round(parseDuration(spec.duration, undefined, "duration")! * US) ||
+      remaining;
 
+    // The fades are validated here, before anything is written, so a bad
+    // fade cannot leave a staged file and an orphaned material behind.
+    const fadeInUs = Math.round(parseDuration(spec.fadeIn, 0, "fade in")! * US);
+    const fadeOutUs = Math.round(
+      parseDuration(spec.fadeOut, 0, "fade out")! * US,
+    );
+
+    if (durationUs <= 0) {
+      throw new Error(
+        `Invalid duration: the audio material is empty (${probe.duration / US}s).`,
+      );
+    }
     if (sourceStartUs + durationUs > probe.duration + 1000) {
       throw new Error(
         `Requested range ${sourceStartUs / US}s..${(sourceStartUs + durationUs) / US}s exceeds media duration ${probe.duration / US}s`,
@@ -802,6 +992,9 @@ export class Draft {
 
     const targetRange: Timerange = { start: startUs, duration: durationUs };
     this.assertNoOverlap(track, targetRange, "audio clip");
+
+    // Everything validated — now stage the file and register the material.
+    const { materialId } = await this.registerMedia(spec.filePath, "audio");
 
     const seg: Segment = {
       id: randomUUID().replace(/-/g, ""),
@@ -814,15 +1007,15 @@ export class Draft {
       speedId: this.registerSpeed(1),
     };
 
-    if (spec.fadeIn || spec.fadeOut) {
+    if (fadeInUs > 0 || fadeOutUs > 0) {
       const fadeId = randomUUID().replace(/-/g, "");
       this.addMaterial({
         id: fadeId,
         kind: "audio_fade",
         data: {
           id: fadeId,
-          fade_in_duration: Math.round(parseSeconds(spec.fadeIn, 0) * US),
-          fade_out_duration: Math.round(parseSeconds(spec.fadeOut, 0) * US),
+          fade_in_duration: fadeInUs,
+          fade_out_duration: fadeOutUs,
           fade_type: 0,
           type: "audio_fade",
         },
@@ -834,14 +1027,30 @@ export class Draft {
   }
 
   /**
-   * Adds a text segment to the text track.
+   * Adds a text segment to a text track.
    *
    * `subtitle` switches to the caption defaults (smaller size, black
    * outline, placed low on the canvas). Plain text uses the upstream
    * TextSegment defaults instead.
+   *
+   * `track` selects the text track. Track 0 is the caption track; use track 1
+   * for titles or overlays so they can coexist with the captions.
    */
   addText(spec: TextSpec): Segment {
-    const track = this.ensureTrack("text", 0);
+    const track = this.ensureTrack("text", spec.track ?? 0);
+    const startUs = Math.round(parseDuration(spec.start, 0, "start time")! * US);
+    const durationUs = Math.round(
+      parseDuration(spec.duration, 0, "duration")! * US,
+    );
+    if (durationUs <= 0) {
+      throw new Error(`Invalid duration: ${spec.duration} must be greater than zero.`);
+    }
+
+    // Validate before registering anything, so a rejected call leaves no
+    // orphaned material behind.
+    const targetRange: Timerange = { start: startUs, duration: durationUs };
+    this.assertNoOverlap(track, targetRange, "text segment");
+
     const materialId = randomUUID().replace(/-/g, "");
     const base = spec.subtitle ? SUBTITLE_DEFAULT_STYLE : TEXT_DEFAULT_STYLE;
     const style = normalizeStyle(spec.style, base);
@@ -852,11 +1061,14 @@ export class Draft {
     const content = {
       styles: [
         {
+          // The reference implementation writes a fixed alpha of 1.0 here and
+          // carries the actual opacity in global_alpha. Applying the alpha in
+          // both places would square it.
           fill: {
-            alpha: style.alpha,
+            alpha: 1.0,
             content: {
               render_type: "solid",
-              solid: { alpha: style.alpha, color: style.color },
+              solid: { alpha: 1.0, color: style.color },
             },
           },
           range: [0, chars.length],
@@ -902,12 +1114,6 @@ export class Draft {
       },
     });
 
-    const startUs = Math.round(parseSeconds(spec.start, 0) * US);
-    const durationUs = Math.round(parseSeconds(spec.duration, 0) * US);
-
-    const targetRange: Timerange = { start: startUs, duration: durationUs };
-    this.assertNoOverlap(track, targetRange, "text segment");
-
     const seg: Segment = {
       id: randomUUID().replace(/-/g, ""),
       materialId,
@@ -929,25 +1135,62 @@ export class Draft {
   /**
    * Adds a full subtitle track from a script, splitting into lines and
    * distributing them evenly across the given window.
+   *
+   * The whole set is validated before anything is written, so a script that
+   * does not fit leaves the draft untouched.
    */
   addSubtitles(
     script: string,
     start: number,
     duration: number,
-    opts: { maxChars?: number; style?: Partial<TextStyle> } = {},
+    opts: { maxChars?: number; style?: Partial<TextStyle>; track?: number } = {},
   ): Segment[] {
     const lines = splitSubtitleLines(script, opts.maxChars ?? 18);
     if (!lines.length) return [];
-    const totalUs = Math.round(parseSeconds(duration, 0) * US);
+    const totalUs = Math.round(parseDuration(duration, 0, "duration")! * US);
+    const startUs = Math.round(parseDuration(start, 0, "start time")! * US);
     const perLine = Math.floor(totalUs / lines.length);
-    const startUs = Math.round(parseSeconds(start, 0) * US);
+    if (perLine <= 0) {
+      throw new Error(
+        `Invalid duration: ${totalUs / US}s cannot hold ${lines.length} subtitle lines.`,
+      );
+    }
+
+    // Validate every line against the track before adding any of them.
+    const track = this.ensureTrack("text", opts.track ?? 0);
+    const planned: Timerange[] = [];
+    for (let i = 0; i < lines.length; i++) {
+      const range: Timerange = {
+        start: startUs + i * perLine,
+        duration: perLine,
+      };
+      for (const existing of track.segments) {
+        if (timerangesOverlap(existing.targetTimerange, range)) {
+          throw new Error(
+            `SegmentOverlap: subtitle line ${i + 1} [start: ${range.start}, end: ${range.start + range.duration}] ` +
+              `overlaps an existing segment on track text/0 ` +
+              `[start: ${existing.targetTimerange.start}, end: ${existing.targetTimerange.start + existing.targetTimerange.duration}]`,
+          );
+        }
+      }
+      for (const other of planned) {
+        if (timerangesOverlap(other, range)) {
+          throw new Error(
+            `SegmentOverlap: subtitle lines overlap each other near ${range.start / US}s.`,
+          );
+        }
+      }
+      planned.push(range);
+    }
+
     return lines.map((line, i) =>
       this.addText({
         text: line,
-        start: (startUs + i * perLine) / US,
-        duration: perLine / US,
+        start: planned[i].start / US,
+        duration: planned[i].duration / US,
         style: opts.style,
         subtitle: true,
+        track: opts.track ?? 0,
       }),
     );
   }
@@ -962,9 +1205,21 @@ export class Draft {
    */
   removeMedia(filePath: string): number {
     const abs = path.resolve(filePath);
-    const staged = this.stagedMedia.get(abs);
-    if (!staged) return 0;
+    // The file may have been registered as a video, as an audio, or as both.
+    const entries = [
+      this.stagedMedia.get(`video\u0000${abs}`),
+      this.stagedMedia.get(`audio\u0000${abs}`),
+    ].filter((e): e is { materialId: string; stagedName: string } => !!e);
 
+    if (!entries.length) {
+      // The file may have been staged but never referenced by a segment —
+      // for example when an earlier add was rejected. Clean it up anyway so
+      // it cannot become permanently unreachable.
+      this.removeOrphanMaterials();
+      return 0;
+    }
+
+    const materialIds = new Set(entries.map((e) => e.materialId));
     let removed = 0;
     const removedSpeedIds = new Set<string>();
     const removedFadeIds = new Set<string>();
@@ -972,7 +1227,7 @@ export class Draft {
     for (const track of this.tracks) {
       const keep: Segment[] = [];
       for (const seg of track.segments) {
-        if (seg.materialId !== staged.materialId) {
+        if (!materialIds.has(seg.materialId)) {
           keep.push(seg);
           continue;
         }
@@ -983,21 +1238,25 @@ export class Draft {
       track.segments = keep;
     }
 
-    if (removed === 0) return 0;
-
-    // Only drop the media material when no segment still references it.
-    const stillReferenced = this.tracks.some((t) =>
-      t.segments.some((s) => s.materialId === staged.materialId),
-    );
-    if (!stillReferenced) {
-      this.materials.delete(staged.materialId);
-      this.materialOrder = this.materialOrder.filter(
-        (m) => m.id !== staged.materialId,
+    // Drop the media materials that no segment references any more.
+    for (const entry of entries) {
+      const stillReferenced = this.tracks.some((t) =>
+        t.segments.some((s) => s.materialId === entry.materialId),
       );
-      this.stagedMedia.delete(abs);
+      if (stillReferenced) continue;
+
+      this.materials.delete(entry.materialId);
+      this.materialOrder = this.materialOrder.filter(
+        (m) => m.id !== entry.materialId,
+      );
+      for (const key of [...this.stagedMedia.keys()]) {
+        if (this.stagedMedia.get(key)?.materialId === entry.materialId) {
+          this.stagedMedia.delete(key);
+        }
+      }
 
       // Remove the staged copy from disk.
-      const stagedPath = path.join(this.materialsDir, staged.stagedName);
+      const stagedPath = path.join(this.materialsDir, entry.stagedName);
       try {
         fs.rmSync(stagedPath, { force: true });
       } catch {
@@ -1018,7 +1277,55 @@ export class Draft {
       }
     }
 
+    this.removeOrphanMaterials();
     return removed;
+  }
+
+  /**
+   * Drops materials that no segment references.
+   *
+   * A rejected add can leave a material behind — for example a video whose
+   * staged copy was made before the overlap check failed. Such a material
+   * is unreachable through the timeline, so it is removed here.
+   */
+  private removeOrphanMaterials(): void {
+    const used = new Set<string>();
+    for (const track of this.tracks) {
+      for (const seg of track.segments) {
+        used.add(seg.materialId);
+        if (seg.speedId) used.add(seg.speedId);
+        for (const ref of seg.extraMaterialRefs) used.add(ref);
+      }
+    }
+
+    const orphans = this.materialOrder.filter((m) => !used.has(m.id));
+    if (!orphans.length) return;
+
+    for (const orphan of orphans) {
+      this.materials.delete(orphan.id);
+      // A staged media file that no segment uses is deleted from disk too.
+      if (orphan.kind === "video" || orphan.kind === "audio") {
+        const stagedPath = String(
+          (orphan.data as any).path ?? "",
+        );
+        if (stagedPath && stagedPath.startsWith(this.materialsDir)) {
+          try {
+            fs.rmSync(stagedPath, { force: true });
+          } catch {
+            /* already gone */
+          }
+        }
+      }
+    }
+
+    this.materialOrder = this.materialOrder.filter((m) => used.has(m.id));
+
+    // Drop cache entries whose material no longer exists.
+    for (const [key, entry] of [...this.stagedMedia.entries()]) {
+      if (!this.materials.has(entry.materialId)) {
+        this.stagedMedia.delete(key);
+      }
+    }
   }
 
   /** Total timeline duration in seconds (max track end). */
@@ -1035,6 +1342,25 @@ export class Draft {
 
   /** Structured summary of the timeline, for inspection and acceptance checks. */
   summary(): Record<string, unknown> {
+    // Resolve the caption text so the summary can actually be proofread —
+    // an acceptance check that cannot see the words is not a check.
+    const textOf = (materialId: string): string | null => {
+      const mat = this.materials.get(materialId);
+      if (!mat || mat.kind !== "text") return null;
+      try {
+        const content = JSON.parse(String((mat.data as any).content));
+        return typeof content.text === "string" ? content.text : null;
+      } catch {
+        return null;
+      }
+    };
+    const materialName = (materialId: string): string | null => {
+      const mat = this.materials.get(materialId);
+      if (!mat) return null;
+      const name = (mat.data as any).name ?? (mat.data as any).material_name;
+      return typeof name === "string" ? name : null;
+    };
+
     return {
       name: this.name,
       dir: this.dir,
@@ -1056,6 +1382,10 @@ export class Draft {
           sourceStart: s.sourceTimerange ? s.sourceTimerange.start / US : null,
           volume: s.volume,
           speed: s.speed,
+          // The caption text and the source media name, so the result can be
+          // checked without opening the draft file.
+          text: textOf(s.materialId),
+          media: materialName(s.materialId),
         })),
       })),
       materialCount: this.materialOrder.length,
@@ -1063,6 +1393,7 @@ export class Draft {
         id: m.id,
         kind: m.kind,
         name: (m.data as any).name ?? (m.data as any).material_name,
+        path: (m.data as any).path ?? null,
       })),
     };
   }
@@ -1089,17 +1420,21 @@ export class Draft {
       (materials[bucket] as unknown[]).push(entry.data);
     }
 
-    const tracks = this.tracks.map((t) => ({
-      // `attribute` is the mute flag in the JianYing schema, not a track
-      // index. Every track here is unmuted.
-      attribute: 0,
-      flag: 0,
-      id: t.id,
-      is_default_name: false,
-      name: t.name,
-      segments: t.segments.map((s) => this.serializeSegment(t, s)),
-      type: t.type,
-    }));
+    // A track with no segments carries no information — it can be left over
+    // from a rejected add — so it is not written to the draft.
+    const tracks = this.tracks
+      .filter((t) => t.segments.length > 0)
+      .map((t) => ({
+        // `attribute` is the mute flag in the JianYing schema, not a track
+        // index. Every track here is unmuted.
+        attribute: 0,
+        flag: 0,
+        id: t.id,
+        is_default_name: false,
+        name: t.name,
+        segments: t.segments.map((s) => this.serializeSegment(t, s)),
+        type: t.type,
+      }));
 
     return {
       business_info: null,
@@ -1401,18 +1736,40 @@ const WINDOWS_RESERVED_NAMES = new Set([
   "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
 ]);
 
-function sanitizeName(name: string): string {
-  const cleaned = String(name)
+/**
+ * Sanitises a draft name into something safe to use as a directory name.
+ *
+ * Illegal characters become underscores, leading and trailing dots are
+ * stripped, and Windows device names are rejected.
+ */
+export function sanitizeDraftName(name: string): string {
+  // The order matters: strip trailing dots *before* trimming whitespace, so
+  // that "a ." collapses to "a" and not to "a ". The result is sanitised
+  // again to make the function idempotent — the name a draft is registered
+  // under must be the same name the caller can address it with.
+  let cleaned = String(name)
     .replace(/[<>:"/\\|?*\u0000-\u001f]+/g, "_")
-    .trim()
     .replace(/^\.+/, "")
     .replace(/\.+$/, "")
+    .trim()
     .replace(/\s+/g, " ");
+  if (cleaned !== name) {
+    const second = String(cleaned)
+      .replace(/^\.+/, "")
+      .replace(/\.+$/, "")
+      .trim()
+      .replace(/\s+/g, " ");
+    if (second !== cleaned) cleaned = second;
+  }
   if (!cleaned) throw new Error("Invalid draft name: empty after sanitization.");
   if (WINDOWS_RESERVED_NAMES.has(cleaned.toUpperCase())) {
     throw new Error(`Invalid draft name: "${cleaned}" is a reserved device name.`);
   }
   return cleaned;
+}
+
+function sanitizeName(name: string): string {
+  return sanitizeDraftName(name);
 }
 
 /**

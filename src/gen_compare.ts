@@ -29,7 +29,7 @@ async function main() {
 
   // Canvas size is intentionally left unset so the automatic resolution
   // adaptation matches the upstream oracle's behaviour.
-  await client.call("jianying_create_draft", { name: DRAFT_NAME, fps: 30 });
+  await client.call("jianying_create_draft", { name: DRAFT_NAME, fps: 30, overwrite: true });
   await client.call("jianying_add_video", {
     name: DRAFT_NAME, filePath: path.join(MEDIA, "vid1.mp4"), start: 0, duration: 4,
   });

@@ -76,11 +76,18 @@ jianying_add_audio  name=...  filePath=/abs/voice.mp3  start=0  track=1  volume=
 jianying_add_subtitles  name=...  script="第一句文案。第二句文案。"  start=0.5  duration=15
 ```
 
-- 中文短视频按 **18 字/行** 拆，工具自动按标点切
+- 中文短视频按 **18 字/行** 拆，工具自动按标点切；超长无标点句也会硬切
 - 字幕轨独立，不占视频轨
 - 字幕用**字幕样式**（字号 5 + 黑色描边 + 靠下），这是剪映导入字幕的默认位置
 - 要做标题/花字用 `jianying_add_text`，那是**普通文本样式**（字号 8、无描边、居中）
 - 返回的 `lines` 数组要**回读检查**：AI 对数字、专有名词、多音字极易出错
+
+**标题和字幕要分轨**：标题用 `track=1`，字幕用默认的 `track=0`。同一轨上时间重叠会被拒绝 —— 这是对的，剪映里两层文字本来就该分开。
+
+```bash
+jianying_add_subtitles  name=...  script="字幕内容"  start=0.5  duration=15  track=0
+jianying_add_text      name=...  text="3秒上头"  start=0.2  duration=2.5  track=1
+```
 
 ### 6. 保存 + 验收
 
@@ -118,11 +125,18 @@ jianying_close_draft    name=...
 | 同轨道片段重叠 | `SegmentOverlap` |
 | 源时长超出素材 | `exceeds media duration` |
 | 拿含视频轨的文件当音频 | `must not contain a video track` |
+| 拿音频文件当视频素材 | `must not be an audio-only file` |
+| 负数的起点 / 时长 / 淡入淡出 | `must not be negative` |
 | 重复打开同名草稿 | `already open`（防止丢未保存的改动） |
+| 建同名草稿时磁盘上已有 | `already exists`（要覆盖得显式传 `overwrite=true`） |
 | 覆盖不是草稿的目录 | `does not look like a JianYing draft` |
 | 草稿名是 `..` / `.` / Windows 设备名 | `Invalid draft name` |
+| SRT 导出到已存在的文件 | `Refusing to overwrite`（要覆盖得显式传 `overwrite=true`） |
+| SRT 导出到非 `.srt` 路径 | `must end in .srt` |
 
-看到这些报错就按提示改参数，**不要绕过去** —— 它们拦下的都是剪映会渲染错乱的情况。
+看到这些报错就按提示改参数，**不要绕过去** —— 它们拦下的都是剪映会渲染错乱、或者会毁掉你已有文件的情况。
+
+被拒绝的调用**不会留下垃圾**：不会残留孤儿素材，也不会残留复制到草稿里的素材文件。
 
 ## 导出
 

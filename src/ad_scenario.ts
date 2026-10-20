@@ -19,7 +19,7 @@ const SERVER = path.join(__dirname, "server.js");
  * on any machine; they default to paths relative to the repository root.
  */
 const REPO_ROOT = path.resolve(__dirname, "..");
-const MEDIA = process.env.JY_TEST_MEDIA ?? path.join(REPO_ROOT, "test-media");
+const MEDIA = process.env.JY_TEST_MEDIA ?? path.join(REPO_ROOT, "ad_media");
 const DRAFTS_ROOT = process.argv[2] ?? path.join(REPO_ROOT, "ad_drafts");
 const DRAFT = "休闲解谜_竖版广告_01";
 
@@ -38,7 +38,7 @@ async function main() {
 
   // 2. Create the project. Canvas left unset so it adapts to the footage.
   console.log("\n2) 建工程");
-  const created = await client.call("jianying_create_draft", { name: DRAFT, fps: 30 });
+  const created = await client.call("jianying_create_draft", { name: DRAFT, fps: 30, overwrite: true });
   console.log(`   canvas = ${created.draft.width}x${created.draft.height}`);
 
   // 3. Lay the storyboard: hook -> demo -> CTA.
@@ -76,8 +76,10 @@ async function main() {
   console.log(`   字幕 ${subs.lineCount} 行：`);
   for (const l of subs.lines) console.log(`     · ${l}`);
 
+  // The title goes on a separate text track so it can coexist with the
+  // captions.
   await client.call("jianying_add_text", {
-    name: DRAFT, text: "3秒上头", start: 0.2, duration: 2.5,
+    name: DRAFT, text: "3秒上头", start: 0.2, duration: 2.5, track: 1,
     style: { size: 9.0, bold: true, color: [1.0, 0.85, 0.1], align: 1 },
   });
 
@@ -94,15 +96,15 @@ async function main() {
   console.log(`   画布        ${d.width}x${d.height}`);
   for (const t of d.tracks) {
     console.log(
-      `   ${t.type.padEnd(6)} track${t.attribute}  ${t.segmentCount} 段  ${t.durationSeconds}s`,
+      `   ${t.type.padEnd(6)} track${t.index}  ${t.segmentCount} 段  ${t.durationSeconds}s`,
     );
   }
 
   const info = JSON.parse(
     fs.readFileSync(path.join(saved.draftPath, "draft_info.json"), "utf8"),
   );
-  const bgmTrack = info.tracks.find((t: any) => t.type === "audio" && t.attribute === 0);
-  const voiceTrack = info.tracks.find((t: any) => t.type === "audio" && t.attribute === 1);
+  const bgmTrack = info.tracks.find((t: any) => t.type === "audio" && t.name === "Audio");
+  const voiceTrack = info.tracks.find((t: any) => t.type === "audio" && t.name === "Audio_1");
   console.log(`   BGM 音量    ${bgmTrack?.segments?.[0]?.volume}`);
   console.log(`   人声音量    ${voiceTrack?.segments?.[0]?.volume}`);
   console.log(`   素材自包含  ${fs.readdirSync(path.join(saved.draftPath, "materials")).length} 个文件`);

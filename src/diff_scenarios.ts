@@ -70,7 +70,7 @@ const scenarios: Scenario[] = [
 mat = draft.VideoMaterial(stage(os.path.join(M, "photo.png")))
 mat2 = draft.VideoMaterial(stage(os.path.join(M, "vid1.mp4")))
 sf.add_track(draft.TrackType.video, "PhotoTrack")
-sf.add_track(draft.TrackType.video, "VideoTrack2")
+sf.add_track(draft.TrackType.video, "VideoTrack2", relative_index=1)
 sf.add_segment(draft.VideoSegment(mat, draft.trange(0, 5_000_000)), "PhotoTrack")
 sf.add_segment(draft.VideoSegment(mat2, draft.trange(5_000_000, 4_000_000)), "VideoTrack2")
 `,
@@ -107,8 +107,8 @@ sf.add_segment(draft.VideoSegment(mat, draft.trange(0, 2_000_000),
     upstream: `
 m1 = draft.VideoMaterial(stage(os.path.join(M, "vid1.mp4")))
 m2 = draft.VideoMaterial(stage(os.path.join(M, "vid2.mp4")))
-sf.add_track(draft.TrackType.video, "Track2")
-sf.add_track(draft.TrackType.video, "Track3")
+sf.add_track(draft.TrackType.video, "Track2", relative_index=1)
+sf.add_track(draft.TrackType.video, "Track3", relative_index=2)
 sf.add_segment(draft.VideoSegment(m1, draft.trange(0, 4_000_000)), "Track2")
 sf.add_segment(draft.VideoSegment(m2, draft.trange(0, 3_000_000)), "Track3")
 `,

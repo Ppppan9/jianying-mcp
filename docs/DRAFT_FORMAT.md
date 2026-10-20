@@ -262,8 +262,11 @@ tracks of that type:
 | audio | 0 |
 | text | 15000 |
 
-The reference implementation leaves the relative index at 0, so every track of
-a type shares its base index — only text differs, at 15000.
+Two tracks of the same type **must** get different render indices, otherwise
+JianYing cannot tell them apart — a second video track would render on top
+of the first. The reference implementation only creates one track per type by
+default, so its relative index stays at 0; the moment a second track is
+added, the index has to advance.
 
 ### Segment serialization differs per track type
 
@@ -346,10 +349,28 @@ producing a broken file.
 | Two segments on the same track may not overlap | `SegmentOverlap` |
 | A source range may not exceed the media duration | `ValueError` |
 | A file with a video track may not be used as an audio material | `ValueError` |
+| An audio-only file may not be used as a video material | — |
+| A still image may be placed for any length | — |
 | Adjacent segments (one ends exactly where the next begins) are valid | — |
 
 Overlap is computed as `not (a.end <= b.start or b.end <= a.start)`, so
 touching segments do not overlap.
+
+### Rules this project adds
+
+The reference implementation leaves a few holes that would produce a draft
+JianYing mis-renders. This project closes them:
+
+| Rule | Why |
+|---|---|
+| Negative start times and durations are refused | JianYing has no representation for them |
+| The media cache is keyed by kind **and** path | A file used as both video and audio needs two materials |
+| A rejected add leaves no orphan material or staged file | Otherwise the material list references files no segment uses |
+| `add_subtitles` validates every line before adding any | A script that does not fit must not half-apply |
+| The media prober must not mistake cover art for a video track | An mp3 with an embedded cover is an audio file |
+| The stdin line buffer is capped | A peer sending no newline would grow it without bound |
+| `export_srt` refuses to overwrite and refuses a non-`.srt` path | The path comes from the caller and may point at source media |
+| `create_draft` does not overwrite by default | Overwriting discards an existing project |
 
 ---
 
@@ -361,6 +382,41 @@ as `video`, so PNG and other images land in the `videos` bucket, not `images`.
 
 An image with no decodable stream at all is treated as a `photo` with a
 3-hour duration.
+
+### A still image may be placed for any length
+
+A still image has no intrinsic length, so it can sit on the timeline for as
+long as the edit needs. The segment's `source_timerange` must still fit
+inside the material's `duration`, so the material is given a **3 hour**
+duration while the probe reports the 10 second fallback. Without this, a
+60-second still image would produce a segment whose source range overruns its
+own material.
+
+### Cover art is not a video track
+
+An mp3 with embedded cover art exposes the artwork as a video stream with
+`disposition.attached_pic = 1`. It belongs to the audio — it is not a
+picture the user can place on a timeline. The prober must skip it, or the
+file would be misclassified as video, rejected as an audio material, and
+written into the draft with the artwork's dimensions.
+
+### Prober differences are not format differences
+
+Two things depend on the media prober rather than on the draft format, and
+they differ between platforms:
+
+| | ffprobe (this project) | MediaInfo (reference) |
+|---|---|---|
+| Still image | video stream, 10 s fallback | image track on Linux (3 h), video track on macOS (10 s) |
+| mp3 duration | container duration (5.000 s) | decoded sample count (5.042 s) |
+
+Neither changes how JianYing renders the draft, so the differential
+comparison normalises both away. Everything else — the bucket set, the
+material schema, the track layout and the segment serialization — is
+compared exactly.
+
+This project uses ffprobe because it is deterministic across platforms and
+ships with ffmpeg, which the reference implementation also expects.
 
 ---
 
