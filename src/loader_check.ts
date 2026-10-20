@@ -34,10 +34,22 @@ const MINIMAL = {
   canvas_config: { width: 1920, height: 1080 },
 };
 
-function deep(n: number): any {
-  let x: any = { a: 1 };
-  for (let i = 0; i < n; i++) x = { n: x };
-  return { tracks: [], materials: {}, deep: x };
+/**
+ * A deeply nested draft, built as text.
+ *
+ * The nesting is assembled as a string rather than with JSON.stringify: the
+ * recursive stringifier overflows the stack on a small one, and how deep the
+ * stack is depends on the machine. The point of the case is the depth of the
+ * *file*, not the depth of the stack that built it.
+ */
+function deepJson(depth: number): string {
+  return (
+    '{"tracks":[],"materials":{},"deep":' +
+    '{"n":'.repeat(depth) +
+    '{"a":1}' +
+    "}".repeat(depth) +
+    "}"
+  );
 }
 
 interface Case {
@@ -119,7 +131,7 @@ const CASES: Case[] = [
       materials: { videos: [{ type: "video", material_name: "a.mp4" }] },
     }),
   },
-  { name: "a very deep structure", info: JSON.stringify(deep(5000)) },
+  { name: "a very deep structure", info: deepJson(2000) },
   { name: "a byte order mark", info: "﻿" + JSON.stringify(MINIMAL) },
   {
     name: "a material bucket that is not a list",
