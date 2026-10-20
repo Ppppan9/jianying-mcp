@@ -399,18 +399,31 @@ async function tryFfprobe(abs: string): Promise<MediaProbe | null> {
     const video = realVideo;
 
     let durationUs = 0;
-    // Prefer the audio duration for an audio file, then the video stream's,
-    // then the container's.
-    const rawDur =
-      audio?.duration ?? video?.duration ?? data.format?.duration;
+    // The duration of a material with a video stream is the video's
+    // duration. Using the audio duration here would truncate a video whose
+    // audio track is shorter than its picture — a common case for a
+    // narrated still sequence. The audio duration is only the fallback when
+    // the file has no video stream at all.
+    const rawDur = video
+      ? video.duration ?? data.format?.duration
+      : audio?.duration ?? data.format?.duration;
     if (rawDur) durationUs = Math.round(Number(rawDur) * US);
 
     if (video) {
-      // A single-frame image exposes a video stream but reports no duration.
-      // The upstream implementation falls back to 10 seconds and keeps the
-      // material classified as video.
+      // A still image exposes a video stream, but the duration it reports is
+      // unreliable: some decoders report nothing, others report a single
+      // frame's worth (0.04s at 25fps). The file extension is the reliable
+      // signal, combined with a frame count of at most one.
       const ext = path.extname(abs).toLowerCase();
-      const isStill = IMAGE_EXTENSIONS.has(ext);
+      const isImageExtension = IMAGE_EXTENSIONS.has(ext);
+      const frameCount =
+        video.nb_frames !== undefined && video.nb_frames !== null
+          ? Number(video.nb_frames)
+          : undefined;
+      const isStill =
+        isImageExtension &&
+        (frameCount === undefined ? true : frameCount <= 1);
+
       return {
         duration: durationUs > 0 ? durationUs : STILL_IMAGE_DEFAULT_DURATION_US,
         width: Number(video.width) || 1920,
@@ -418,7 +431,7 @@ async function tryFfprobe(abs: string): Promise<MediaProbe | null> {
         kind: "video",
         // A still image may be placed on the timeline for any length; only its
         // intrinsic duration is unknown.
-        stillImage: isStill && durationUs === 0,
+        stillImage: isStill,
       };
     }
     if (audio) {
@@ -641,7 +654,11 @@ export class Draft {
    * JianYing cannot tell them apart.
    */
   private ensureTrack(type: TrackState["type"], relativeIndex: number): TrackState {
-    const index = Math.max(0, Math.trunc(relativeIndex));
+    // A malformed index must not produce a NaN render index, which would be
+    // written into the draft as null.
+    const index = Number.isFinite(relativeIndex)
+      ? Math.max(0, Math.trunc(relativeIndex))
+      : 0;
     let track = this.tracks.find((t) => t.type === type && t.index === index);
     if (!track) {
       track = {
@@ -1301,14 +1318,27 @@ export class Draft {
     const orphans = this.materialOrder.filter((m) => !used.has(m.id));
     if (!orphans.length) return;
 
+    // A staged file is shared when two materials point at the same path —
+    // the same file registered as both a video and an audio material. It may
+    // only be deleted when no surviving material still points at it.
+    const survivingPaths = new Set(
+      this.materialOrder
+        .filter((m) => used.has(m.id))
+        .map((m) => String((m.data as any).path ?? ""))
+        .filter(Boolean),
+    );
+
     for (const orphan of orphans) {
       this.materials.delete(orphan.id);
-      // A staged media file that no segment uses is deleted from disk too.
+      // A staged media file that no segment uses is deleted from disk too —
+      // unless a surviving material still references the same file.
       if (orphan.kind === "video" || orphan.kind === "audio") {
-        const stagedPath = String(
-          (orphan.data as any).path ?? "",
-        );
-        if (stagedPath && stagedPath.startsWith(this.materialsDir)) {
+        const stagedPath = String((orphan.data as any).path ?? "");
+        if (
+          stagedPath &&
+          stagedPath.startsWith(this.materialsDir) &&
+          !survivingPaths.has(stagedPath)
+        ) {
           try {
             fs.rmSync(stagedPath, { force: true });
           } catch {

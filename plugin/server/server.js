@@ -243,7 +243,7 @@ const TOOLS = [
             const start = args.start === undefined
                 ? draft.trackDuration("video", trackIndex(args.track))
                 : parseSeconds(args.start);
-            const seg = await draft.addVideo({ ...args, start });
+            const seg = await draft.addVideo({ ...args, start, track: trackIndex(args.track) });
             return {
                 ok: true,
                 segment: {
@@ -277,12 +277,12 @@ const TOOLS = [
             const start = args.start === undefined
                 ? draft.trackDuration("audio", trackIndex(args.track))
                 : parseSeconds(args.start);
-            const seg = await draft.addAudio({ ...args, start });
+            const seg = await draft.addAudio({ ...args, start, track: trackIndex(args.track) });
             return {
                 ok: true,
                 segment: {
                     id: seg.id,
-                    track: args.track ?? 0,
+                    track: trackIndex(args.track),
                     startSeconds: seg.targetTimerange.start / 1e6,
                     durationSeconds: seg.targetTimerange.duration / 1e6,
                     volume: seg.volume,
@@ -304,7 +304,7 @@ const TOOLS = [
         }, ["name", "text", "start", "duration"]),
         handler: (args) => {
             const draft = requireSession(args.name);
-            const seg = draft.addText(args);
+            const seg = draft.addText({ ...args, track: trackIndex(args.track) });
             return {
                 ok: true,
                 segment: {

@@ -400,6 +400,29 @@ picture the user can place on a timeline. The prober must skip it, or the
 file would be misclassified as video, rejected as an audio material, and
 written into the draft with the artwork's dimensions.
 
+### A video's duration follows the video
+
+A file can have a video stream and a shorter audio stream — a narrated
+still sequence, or a picture track with a voice-over over part of it. The
+material's duration is the **video's** duration. Taking the audio duration
+would truncate the material: JianYing would treat a 10 second clip as a
+2 second one, and a request for the full length would be rejected as
+out of range.
+
+The audio duration is only the fallback when the file has no video stream.
+
+### A still image is recognised by its extension, not its duration
+
+Decoders disagree about a still image's duration: some report nothing, some
+report one frame's worth (0.04s at 25fps), some report a container duration.
+Relying on the duration meant JPEG — the most common still format, and the
+one phone cameras and web assets produce — was treated as a 40-millisecond
+video and could not be placed on the timeline at all.
+
+The file extension plus a frame count of at most one is the reliable signal.
+The material then carries the 3 hour duration the reference uses, so a clip
+of any length still fits inside it.
+
 ### Prober differences are not format differences
 
 Two things depend on the media prober rather than on the draft format, and

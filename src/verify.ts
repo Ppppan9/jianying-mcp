@@ -519,11 +519,17 @@ async function main() {
   // A still image must be placeable for longer than its probe duration, and
   // the segment's source range must still fit inside the material.
   const photo = path.join(MEDIA_DIR, "photo.png");
-  if (fs.existsSync(photo)) {
+  const photoJpg = path.join(MEDIA_DIR, "photo.jpg");
+  const stillCases: Array<[string, string, number]> = [
+    ["PNG", photo, 7],
+    ["JPEG", photoJpg, 8],
+  ];
+  for (const [label, file, track] of stillCases) {
+    if (!fs.existsSync(file)) continue;
     const still = await client.call("jianying_add_video", {
-      name: "Draft: v2", filePath: photo, start: 0, duration: 60, track: 7,
+      name: "Draft: v2", filePath: file, start: 0, duration: 60, track,
     });
-    check("a still image can be placed for 60s", still.ok === true);
+    check(`a ${label} still image can be placed for 60s`, still.ok === true);
     await client.call("jianying_save_draft", { name: "Draft: v2" });
     // The draft is stored under its sanitised name (a colon is illegal in a
     // file name), which is the name the tool reports.
@@ -532,17 +538,59 @@ async function main() {
       fs.readFileSync(path.join(sanitizedDir, "draft_info.json"), "utf8"),
     );
     const photoMat = stillInfo.materials.videos.find((m: any) =>
-      String(m.material_name).endsWith(".png"),
+      String(m.material_name).endsWith(path.extname(file)),
     );
+    // The still may sit on any video track, so every one of them is searched.
     const photoSeg = stillInfo.tracks
-      .find((t: any) => t.type === "video")
-      ?.segments?.find((s: any) => s.material_id === photoMat?.id);
+      .filter((t: any) => t.type === "video")
+      .flatMap((t: any) => t.segments ?? [])
+      .find((s: any) => s.material_id === photoMat?.id);
     check(
-      "the still image's source range fits its material",
+      `the ${label} still image's source range fits its material`,
       !!photoMat &&
         !!photoSeg &&
         photoSeg.source_timerange.duration <= photoMat.duration,
       { material: photoMat?.duration, source: photoSeg?.source_timerange?.duration },
+    );
+  }
+
+  // A video whose audio track is shorter than its picture must report the
+  // video's duration, not the audio's.
+  const shortAudio = path.join(MEDIA_DIR, "vid_short_audio.mp4");
+  if (fs.existsSync(shortAudio)) {
+    const probedShort = await client.call("jianying_probe_media", {
+      filePath: shortAudio,
+    });
+    check(
+      "a video's duration follows the video, not its shorter audio track",
+      Math.abs(probedShort.durationSeconds - 6) < 0.5,
+      probedShort,
+    );
+  }
+
+  // An mp3 with embedded cover art is an audio file, not a video.
+  const coverMp3 = path.join(MEDIA_DIR, "bgm_cover.mp3");
+  if (fs.existsSync(coverMp3)) {
+    const probedCover = await client.call("jianying_probe_media", {
+      filePath: coverMp3,
+    });
+    check(
+      "an mp3 with cover art is classified as audio",
+      probedCover.kind === "audio",
+      probedCover,
+    );
+    let coverErr: string | null = null;
+    try {
+      await client.call("jianying_add_video", {
+        name: "Draft: v2", filePath: coverMp3, start: 0, duration: 2, track: 9,
+      });
+    } catch (e: any) {
+      coverErr = e.message;
+    }
+    check(
+      "an mp3 with cover art is rejected as a video material",
+      coverErr !== null && /must not be an audio-only file/.test(coverErr),
+      coverErr,
     );
   }
 
