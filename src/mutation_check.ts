@@ -198,6 +198,14 @@ const MUTATIONS: Array<{ name: string; from: string; to: string; file?: string }
     to: "    if (false) {",
     file: "draft.ts",
   },
+  {
+    // A bucket whose value is not a list is malformed, but it is still the
+    // user's data. Dropping it strips it from the draft on the next save.
+    name: "a malformed material bucket is dropped",
+    from: "        materials[bucket] = items;\n      }",
+    to: "        void items;\n      }",
+    file: "draft.ts",
+  },
 ];
 
 function run(cmd: string, args: string[], env: NodeJS.ProcessEnv = {}): boolean {

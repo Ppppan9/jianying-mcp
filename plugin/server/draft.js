@@ -688,8 +688,9 @@ export class Draft {
         for (const [bucket, items] of Object.entries(materials)) {
             if (buckets.some(([, b]) => b === bucket))
                 continue;
-            if (!Array.isArray(items))
-                continue;
+            // A bucket that is not a list is malformed, but it is still the
+            // user's data. It is carried through as it is; dropping it would
+            // strip it from the draft on the next save.
             this.unmodelledBuckets[bucket] = items;
         }
         // Restore the tracks with their segments.
@@ -1513,9 +1514,16 @@ export class Draft {
         // its imported materials, and dropping them would strip the effects,
         // stickers, transitions, masks and keyframes of a real project.
         for (const [bucket, items] of Object.entries(this.unmodelledBuckets)) {
-            if (!materials[bucket])
-                materials[bucket] = [];
-            materials[bucket] = [...materials[bucket], ...items];
+            if (Array.isArray(items)) {
+                const existing = Array.isArray(materials[bucket]) ? materials[bucket] : [];
+                materials[bucket] = [...existing, ...items];
+            }
+            else {
+                // A bucket whose value is not a list is malformed, but it is still
+                // the user's data. It replaces the empty placeholder rather than
+                // being dropped on the floor.
+                materials[bucket] = items;
+            }
         }
         for (const entry of this.materialOrder) {
             // A photo created here goes into the `videos` bucket, which is where

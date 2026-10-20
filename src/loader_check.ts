@@ -45,6 +45,13 @@ interface Case {
   info: string;
   /** What the refusal should say, when the draft is expected to be refused. */
   expect?: RegExp;
+  /**
+   * A value in the saved draft that must have survived.
+   *
+   * The draft has to load for this to mean anything — a refused draft is
+   * left untouched, so the value would be there for the wrong reason.
+   */
+  preserved?: { path: string; value: unknown };
 }
 
 const CASES: Case[] = [
@@ -114,6 +121,24 @@ const CASES: Case[] = [
   },
   { name: "a very deep structure", info: JSON.stringify(deep(5000)) },
   { name: "a byte order mark", info: "﻿" + JSON.stringify(MINIMAL) },
+  {
+    name: "a material bucket that is not a list",
+    info: JSON.stringify({
+      tracks: [],
+      materials: { effects: { weird: true } },
+      canvas_config: { width: 1920, height: 1080 },
+    }),
+    preserved: { path: "materials.effects", value: { weird: true } },
+  },
+  {
+    name: "an unknown material bucket",
+    info: JSON.stringify({
+      tracks: [],
+      materials: { stickers: [{ id: "s1", type: "sticker" }] },
+      canvas_config: { width: 1920, height: 1080 },
+    }),
+    preserved: { path: "materials.stickers.0.id", value: "s1" },
+  },
 ];
 
 interface Outcome {
@@ -227,6 +252,29 @@ async function main() {
         JSON.parse(r.after.toString("utf8"));
       } catch {
         problems.push("the saved file is not valid JSON");
+      }
+    }
+
+    // A value the engine does not model must come back out of the saved
+    // draft. The draft has to have loaded for this to mean anything.
+    if (c.preserved) {
+      if (openReply?.result?.isError) {
+        problems.push("the draft was refused, so nothing could be preserved");
+      } else {
+        let saved: any = null;
+        try {
+          saved = JSON.parse(r.after?.toString("utf8") ?? "null");
+        } catch {
+          /* already reported above */
+        }
+        const found = c.preserved.path
+          .split(".")
+          .reduce<any>((acc, key) => (acc === null || acc === undefined ? acc : acc[key]), saved);
+        if (JSON.stringify(found) !== JSON.stringify(c.preserved.value)) {
+          problems.push(
+            `${c.preserved.path} did not survive the round trip: ${JSON.stringify(found)}`,
+          );
+        }
       }
     }
 

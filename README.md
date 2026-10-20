@@ -195,16 +195,16 @@ node dist/loader_check.js
 ```
 
 ```
-[1] verify.js            Result: 168 passed, 0 failed
+[1] verify.js            Result: 169 passed, 0 failed
 [2] diff_scenarios.js    Scenarios: 12 matched, 0 differed
 [3] compare_drafts.py    [A] Structural diff: 0 difference(s)
                          VERDICT: PASS
 [4] compare_meta_info.py VERDICT: MATCH (25 fields vs the reference template)
 [5] guard_coverage.js  Guards: 34 enforced, 0 not enforced
 [6] protocol_check.js   Protocol: 34 passed, 0 failed
-[7] mutation_check.js   Mutations: 26 of 26 caught, 0 survived
+[7] mutation_check.js   Mutations: 29 of 29 caught, 0 survived
 [8] docs_check.js      Documentation: 40 passed, 0 failed
-[9] loader_check.js    Loader: 18 passed, 0 failed
+[9] loader_check.js    Loader: 20 passed, 0 failed
 ```
 
 The fifth suite is a different question from the others: not "does the draft
@@ -222,9 +222,10 @@ engine on purpose, one rule at a time, and the suite has to notice. A green
 suite proves nothing until you know it can go red.
 
 The ninth suite feeds the loader hostile files: a draft_info.json holding
-an array, a string, null, or an object with no tracks in it. It found that
-those were read as an empty draft — so saving one would have overwritten
-the user's file with nothing, and a null would have thrown a TypeError.
+an array, a string, null, or an object with no tracks in it, a material bucket whose value is not a
+list. It found that those were read as an empty draft — so saving one
+would have overwritten the user's file with nothing, and a null would have
+thrown a TypeError.
 
 The eighth suite makes the documentation executable. Every call the Skill
 file and this README show is sent to the server, and it has to come back
@@ -410,16 +411,16 @@ redistributed here.
 用上游实现当预言机，分三层逐字段对比：
 
 ```
-[1] verify.js            Result: 168 passed, 0 failed
+[1] verify.js            Result: 169 passed, 0 failed
 [2] diff_scenarios.js    Scenarios: 12 matched, 0 differed
 [3] compare_drafts.py    [A] Structural diff: 0 difference(s)
                          VERDICT: PASS
 [4] compare_meta_info.py VERDICT: MATCH (25 fields vs the reference template)
 [5] guard_coverage.js  Guards: 34 enforced, 0 not enforced
 [6] protocol_check.js   Protocol: 34 passed, 0 failed
-[7] mutation_check.js   Mutations: 26 of 26 caught, 0 survived
+[7] mutation_check.js   Mutations: 29 of 29 caught, 0 survived
 [8] docs_check.js      Documentation: 40 passed, 0 failed
-[9] loader_check.js    Loader: 18 passed, 0 failed
+[9] loader_check.js    Loader: 20 passed, 0 failed
 ```
 
 The fifth suite is a different question from the others: not "does the draft

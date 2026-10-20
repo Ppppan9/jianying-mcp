@@ -756,7 +756,7 @@ export class Draft {
    * Material buckets this engine does not model, carried through from a
    * loaded draft so that saving does not strip them.
    */
-  private unmodelledBuckets: Record<string, unknown[]> = {};
+  private unmodelledBuckets: Record<string, unknown> = {};
   /** Ids of the materials this engine created, as opposed to loaded ones. */
   private createdMaterialIds = new Set<string>();
   /**
@@ -946,7 +946,9 @@ export class Draft {
     this.unmodelledBuckets = {};
     for (const [bucket, items] of Object.entries(materials)) {
       if (buckets.some(([, b]) => b === bucket)) continue;
-      if (!Array.isArray(items)) continue;
+      // A bucket that is not a list is malformed, but it is still the
+      // user's data. It is carried through as it is; dropping it would
+      // strip it from the draft on the next save.
       this.unmodelledBuckets[bucket] = items;
     }
 
@@ -1887,7 +1889,7 @@ export class Draft {
   /** Builds the full draft_info.json payload. */
   buildDraftInfo(): Record<string, unknown> {
     const now = Date.now();
-    const materials: Record<string, unknown[]> = {};
+    const materials: Record<string, unknown> = {};
     for (const key of EMPTY_MATERIAL_KEYS) materials[key] = [];
 
     // Material buckets this engine does not model are written back exactly
@@ -1895,8 +1897,15 @@ export class Draft {
     // its imported materials, and dropping them would strip the effects,
     // stickers, transitions, masks and keyframes of a real project.
     for (const [bucket, items] of Object.entries(this.unmodelledBuckets)) {
-      if (!materials[bucket]) materials[bucket] = [];
-      materials[bucket] = [...materials[bucket], ...items];
+      if (Array.isArray(items)) {
+        const existing = Array.isArray(materials[bucket]) ? materials[bucket] : [];
+        materials[bucket] = [...existing, ...items];
+      } else {
+        // A bucket whose value is not a list is malformed, but it is still
+        // the user's data. It replaces the empty placeholder rather than
+        // being dropped on the floor.
+        materials[bucket] = items;
+      }
     }
 
     for (const entry of this.materialOrder) {

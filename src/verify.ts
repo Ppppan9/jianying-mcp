@@ -1152,6 +1152,34 @@ async function main() {
         (seededAfter.materials[bucket] ?? []).length,
     ),
   );
+
+  // A material bucket whose value is not a list is malformed, but it is
+  // still the user's data. It has to come back out of the saved draft
+  // rather than being replaced by an empty list.
+  {
+    const bucketName = "MalformedBucket";
+    const bucketDir = path.join(DRAFTS_ROOT, bucketName);
+    fs.mkdirSync(bucketDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(bucketDir, "draft_info.json"),
+      JSON.stringify({
+        tracks: [],
+        materials: { effects: { weird: true } },
+        canvas_config: { width: 1920, height: 1080 },
+      }),
+      "utf8",
+    );
+    await client.call("jianying_open_draft", { name: bucketName });
+    await client.call("jianying_save_draft", { name: bucketName });
+    const saved = JSON.parse(
+      fs.readFileSync(path.join(bucketDir, "draft_info.json"), "utf8"),
+    );
+    check(
+      "a material bucket that is not a list survives the round trip",
+      JSON.stringify(saved.materials?.effects) === JSON.stringify({ weird: true }),
+      saved.materials?.effects,
+    );
+  }
   check(
     "loading and saving keeps the unmodelled material",
     (seededAfter.materials.effects ?? []).length === 1 &&
