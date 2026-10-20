@@ -357,6 +357,9 @@ function parseFrameRate(value: unknown): number {
 export async function probeMedia(filePath: string): Promise<MediaProbe> {
   const abs = path.resolve(filePath);
   if (!fs.existsSync(abs)) throw new Error(`Media file not found: ${abs}`);
+  if (!fs.statSync(abs).isFile()) {
+    throw new Error(`Media path is not a file: ${abs}`);
+  }
   const ext = path.extname(abs).toLowerCase();
   const looksLikeImage = IMAGE_EXTENSIONS.has(ext);
 

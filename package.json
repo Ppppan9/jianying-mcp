@@ -1,10 +1,12 @@
 {
   "name": "jianying-mcp",
   "version": "1.0.0",
-  "description": "MiniMax-native MCP server for JianYing (剪映) draft automation — zero runtime dependencies",
+  "description": "MiniMax-native MCP server for JianYing (\u526a\u6620) draft automation \u2014 zero runtime dependencies",
   "type": "module",
   "main": "dist/server.js",
-  "bin": { "jianying-mcp": "dist/server.js" },
+  "bin": {
+    "jianying-mcp": "dist/server.js"
+  },
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "start": "node dist/server.js",
@@ -12,7 +14,8 @@
     "scenario": "node dist/ad_scenario.js",
     "compare": "node dist/gen_compare.js",
     "validate-plugin": "python3 scripts/validate_plugin.py plugin",
-    "sync-plugin": "cp dist/server.js dist/draft.js plugin/server/ && cp skills/jianying-editor/SKILL.md plugin/skills/jianying-editor/SKILL.md"
+    "sync-plugin": "cp dist/server.js dist/draft.js plugin/server/ && cp skills/jianying-editor/SKILL.md plugin/skills/jianying-editor/SKILL.md",
+    "guards": "node dist/guard_coverage.js"
   },
   "keywords": [
     "jianying",
@@ -22,7 +25,7 @@
     "model-context-protocol",
     "video-editing",
     "minimax",
-    "剪映"
+    "\u526a\u6620"
   ],
   "license": "MIT",
   "author": "Hou Tao",
@@ -34,5 +37,7 @@
     "@types/node": "^22.10.0",
     "typescript": "^5.7.0"
   },
-  "engines": { "node": ">=20" }
+  "engines": {
+    "node": ">=20"
+  }
 }

@@ -185,7 +185,12 @@ python3 scripts/compare_drafts.py \
 [3] compare_drafts.py    [A] Structural diff: 0 difference(s)
                          VERDICT: PASS
 [4] compare_meta_info.py VERDICT: MATCH (25 fields vs the reference template)
+[5] guard_coverage.js  Guards: 34 enforced, 0 not enforced
 ```
+
+The fifth suite is a different question from the others: not "does the draft
+come out right" but "does every refusal actually happen". A guard that is
+never reached is a guard that does not protect.
 
 The differential harness also runs a **load → save round trip**: a draft
 seeded with effects, stickers, transitions and a media bin is opened, saved
@@ -356,7 +361,12 @@ redistributed here.
 [3] compare_drafts.py    [A] Structural diff: 0 difference(s)
                          VERDICT: PASS
 [4] compare_meta_info.py VERDICT: MATCH (25 fields vs the reference template)
+[5] guard_coverage.js  Guards: 34 enforced, 0 not enforced
 ```
+
+The fifth suite is a different question from the others: not "does the draft
+come out right" but "does every refusal actually happen". A guard that is
+never reached is a guard that does not protect.
 
 The differential harness also runs a **load → save round trip**: a draft
 seeded with effects, stickers, transitions and a media bin is opened, saved
