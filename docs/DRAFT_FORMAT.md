@@ -465,7 +465,52 @@ install locations itself: `$HOME/.local/bin`, `$HOME/bin`,
 
 ---
 
-## 6. Verification
+## 6. Opening an existing draft
+
+A draft is a file the user may have spent hours on. Loading one and saving it
+again must not lose anything.
+
+### Material this engine does not model is carried through
+
+The buckets below hold effects, stickers, transitions, canvases, masks,
+keyframes and anything else a real project may contain. The engine does not
+model them, so a loaded draft keeps them verbatim and writes them back on
+save — the same thing the reference implementation does with its imported
+materials.
+
+A draft also keeps a **media bin**: clips that are staged in `materials/`
+but not referenced by any segment. Those are the user's working material;
+they survive a load and save untouched.
+
+### Segment references are carried through
+
+A segment's `extra_material_refs` may point at a transition, an effect or a
+sticker material. Every reference is preserved, not just the ones the engine
+understands.
+
+The reference implementation has a defect here: its text segments point at a
+speed material that is never added to the `speeds` bucket, so the reference
+is dangling. This project does not produce dangling references.
+
+### Editing preferences are preserved
+
+`config.maintrack_adsorb` (timeline snapping), `config.lyrics_sync` and
+`config.subtitle_sync` are user settings rather than content, so they are
+read on load and written back on save.
+
+### Removing media from a loaded draft
+
+The staged copy of a media file is named after the MD5 of its **source** path,
+so the staged name can be computed from the path the caller holds. That is
+how a loaded draft's media is found — matching by file name would risk
+removing an unrelated file.
+
+When no media matches, nothing is removed. A cleanup sweep at that point
+would delete the media bin.
+
+---
+
+## 7. Verification
 
 The implementation in `src/draft.ts` is validated in three layers.
 
@@ -532,7 +577,7 @@ before changing the engine.
 
 ---
 
-## 5. What this format does **not** do
+## 8. What this format does **not** do
 
 - **No export.** JianYing has no headless render path on macOS. The draft
   must be opened in JianYing and exported by hand. (The upstream project

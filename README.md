@@ -180,12 +180,17 @@ python3 scripts/compare_drafts.py \
 ```
 
 ```
-[1] verify.js            Result: 123 passed, 0 failed
+[1] verify.js            Result: 137 passed, 0 failed
 [2] diff_scenarios.js    Scenarios: 12 matched, 0 differed
 [3] compare_drafts.py    [A] Structural diff: 0 difference(s)
                          VERDICT: PASS
 [4] compare_meta_info.py VERDICT: MATCH (25 fields vs the reference template)
 ```
+
+The differential harness also runs a **load → save round trip**: a draft
+seeded with effects, stickers, transitions and a media bin is opened, saved
+and compared. It is what catches the silent data loss that a
+generate-and-compare check cannot see.
 
 Layer 2 is the important one: it drives the **underlying `pyJianYingDraft`
 library**, not the wrapper skill, because the wrapper silently drops clip
@@ -237,8 +242,16 @@ material types instead of seven, and a null where the template has a list),
 the macOS draft location now includes the domestic build's container
 (`com.lemon.jianyingpro`), an animated GIF is no longer mistaken for a still
 image, and the numeric values written straight into the draft — colour
-components, alpha, font size, alignment, volume — are validated instead of
-being passed through unchecked.
+components, alpha, font size, alignment, volume, canvas size and frame rate
+— are validated instead of being passed through unchecked.
+
+An eighth review then found that the loader was the weak point: opening a
+draft and saving it again stripped every material the engine does not model
+(effects, stickers, transitions, masks, keyframes) and could delete the
+media bin — clips that are staged but not on the timeline. The reference
+implementation carries that material through, and so does this one now. The
+round-trip check was added to the harness at the same time, because the
+generate-and-compare check could never have caught it.
 
 The full contract, including every rule now enforced, is in
 [`docs/DRAFT_FORMAT.md`](docs/DRAFT_FORMAT.md).
@@ -335,6 +348,11 @@ redistributed here.
                          VERDICT: PASS
 [4] compare_meta_info.py VERDICT: MATCH (25 fields vs the reference template)
 ```
+
+The differential harness also runs a **load → save round trip**: a draft
+seeded with effects, stickers, transitions and a media bin is opened, saved
+and compared. It is what catches the silent data loss that a
+generate-and-compare check cannot see.
 
 第 2 层最关键：它驱动的是**底层 `pyJianYingDraft` 库**而不是上游 wrapper —— 因为 wrapper 会静默丢掉变速、音频淡入淡出和越界校验。覆盖静图、变速、源偏移、多轨道、淡入淡出、边界时长、文本与字幕样式、重叠、越界请求、素材移除。
 

@@ -505,6 +505,27 @@ export class Draft {
      * A file used as both video and audio needs two entries.
      */
     stagedMedia = new Map();
+    /**
+     * Media index by the staged file name inside the draft, so a loaded
+     * draft's media can be found by the path the caller knows it under.
+     */
+    stagedByMaterialId = new Map();
+    /**
+     * Material buckets this engine does not model, carried through from a
+     * loaded draft so that saving does not strip them.
+     */
+    unmodelledBuckets = {};
+    /** Ids of the materials this engine created, as opposed to loaded ones. */
+    createdMaterialIds = new Set();
+    /**
+     * Editing preferences read from a loaded draft and written back on save.
+     * They are user settings, not content, so they must survive a round trip.
+     */
+    configFlags = {
+        maintrackAdsorb: false,
+        lyricsSync: false,
+        subtitleSync: false,
+    };
     /** In-flight registrations, so concurrent calls share one material. */
     pendingMedia = new Map();
     /**
@@ -518,9 +539,9 @@ export class Draft {
     canvasHeight;
     constructor(options) {
         this.name = sanitizeName(options.name);
-        this.width = options.width ?? 1920;
-        this.height = options.height ?? 1080;
-        this.fps = options.fps ?? 30;
+        this.width = normalizeCanvasSize(options.width, 1920, "width");
+        this.height = normalizeCanvasSize(options.height, 1080, "height");
+        this.fps = normalizeFps(options.fps);
         this.root = resolveDraftsRoot(options.draftsRoot);
         this.dir = path.join(this.root, this.name);
         this.materialsDir = path.join(this.dir, "materials");
@@ -583,6 +604,12 @@ export class Draft {
         }
         this.explicitResolution = true;
         this.resolutionResolved = true;
+        const config = info.config ?? {};
+        this.configFlags = {
+            maintrackAdsorb: Boolean(config.maintrack_adsorb),
+            lyricsSync: Boolean(config.lyrics_sync),
+            subtitleSync: Boolean(config.subtitle_sync),
+        };
         // Restore the materials this engine understands, keyed by their id.
         const materials = info.materials ?? {};
         const buckets = [
@@ -597,20 +624,44 @@ export class Draft {
             for (const material of materials[bucket] ?? []) {
                 if (!material || typeof material.id !== "string")
                     continue;
-                this.addMaterial({ id: material.id, kind, data: material });
+                // A loaded material was not created here, so it is never swept.
+                this.addMaterial({ id: material.id, kind, data: material }, false);
                 // A media material that was staged in this draft is registered under
                 // its staged path, so it can be found again by the original file.
                 if (kind === "video" || kind === "photo" || kind === "audio") {
                     const stagedPath = String(material.path ?? "");
                     if (stagedPath) {
-                        const cacheKey = `${kind}\u0000${stagedPath}`;
-                        this.stagedMedia.set(cacheKey, {
+                        const stagedName = path.basename(stagedPath);
+                        // The cache is keyed by the *source* path, the same key the add
+                        // path uses. Registering it under the staged path instead would
+                        // mean remove_media could never find it after a load.
+                        this.stagedMedia.set(`${kind}\u0000${stagedPath}`, {
                             materialId: material.id,
-                            stagedName: path.basename(stagedPath),
+                            stagedName,
+                        });
+                        // The staged file is named after the md5 of the source path, so
+                        // it can be looked up from the source path the caller gives.
+                        this.stagedByMaterialId.set(stagedName, {
+                            materialId: material.id,
+                            kind,
+                            stagedPath,
                         });
                     }
                 }
             }
+        }
+        // Everything this engine does not model is carried through untouched, the
+        // way the reference implementation carries its imported materials. The
+        // buckets below hold effects, stickers, transitions, canvases, masks,
+        // keyframes and anything else a real draft may contain; dropping them on
+        // save would silently strip the user's work.
+        this.unmodelledBuckets = {};
+        for (const [bucket, items] of Object.entries(materials)) {
+            if (buckets.some(([, b]) => b === bucket))
+                continue;
+            if (!Array.isArray(items))
+                continue;
+            this.unmodelledBuckets[bucket] = items;
         }
         // Restore the tracks with their segments.
         const perTypeCounter = {};
@@ -655,7 +706,11 @@ export class Draft {
                         : null,
                     speed: Number(raw.speed ?? 1),
                     volume: Number(raw.volume ?? 1),
-                    extraMaterialRefs: (raw.extra_material_refs ?? []).filter((ref) => this.materials.get(ref)?.data?.type === "audio_fade"),
+                    // Every reference is carried through, not just the fades: a
+                    // segment may point at a transition, an effect or a sticker
+                    // material this engine does not model, and dropping those
+                    // references would break the draft.
+                    extraMaterialRefs: [...(raw.extra_material_refs ?? [])].filter((ref) => typeof ref === "string"),
                     clip: raw.clip
                         ? {
                             transform: {
@@ -792,6 +847,11 @@ export class Draft {
         fs.copyFileSync(abs, stagedPath);
         const materialId = randomUUID().replace(/-/g, "");
         this.stagedMedia.set(cacheKey, { materialId, stagedName });
+        this.stagedByMaterialId.set(stagedName, {
+            materialId,
+            kind,
+            stagedPath,
+        });
         if (kind === "audio") {
             this.addMaterial({
                 id: materialId,
@@ -865,9 +925,12 @@ export class Draft {
         }
         return { materialId, probe, stagedPath };
     }
-    addMaterial(entry) {
+    addMaterial(entry, created = true) {
         this.materials.set(entry.id, entry);
         this.materialOrder.push(entry);
+        // Only materials this engine created may be swept as orphans later.
+        if (created)
+            this.createdMaterialIds.add(entry.id);
     }
     /**
      * Registers a Speed material for a segment.
@@ -1181,15 +1244,33 @@ export class Draft {
     removeMedia(filePath) {
         const abs = path.resolve(filePath);
         // The file may have been registered as a video, as an audio, or as both.
-        const entries = [
+        let entries = [
             this.stagedMedia.get(`video\u0000${abs}`),
+            this.stagedMedia.get(`photo\u0000${abs}`),
             this.stagedMedia.get(`audio\u0000${abs}`),
         ].filter((e) => !!e);
+        // A loaded draft knows its media by the staged copy inside the draft.
+        // The staged file is named after the md5 of the *source* path, so the
+        // staged name can be computed from the path the caller gives — no
+        // guessing by file name, which could match an unrelated file.
         if (!entries.length) {
-            // The file may have been staged but never referenced by a segment —
-            // for example when an earlier add was rejected. Clean it up anyway so
-            // it cannot become permanently unreachable.
-            this.removeOrphanMaterials();
+            const md5 = createHash("md5").update(abs).digest("hex");
+            const ext = path.extname(abs);
+            for (const kind of ["video", "photo", "audio"]) {
+                const cached = this.stagedMedia.get(`${kind}\u0000${abs}`);
+                if (cached)
+                    continue;
+                const stagedName = `${md5}${ext}`;
+                const match = this.stagedByMaterialId.get(stagedName);
+                if (match) {
+                    entries.push({ materialId: match.materialId, stagedName });
+                }
+            }
+        }
+        if (!entries.length) {
+            // Nothing matched. Returning without touching anything is essential:
+            // a cleanup sweep here would delete media the draft legitimately holds
+            // but no segment references — the media bin a real project keeps.
             return 0;
         }
         const materialIds = new Set(entries.map((e) => e.materialId));
@@ -1249,6 +1330,11 @@ export class Draft {
      * A rejected add can leave a material behind — for example a video whose
      * staged copy was made before the overlap check failed. Such a material
      * is unreachable through the timeline, so it is removed here.
+     *
+     * Only materials this engine created are eligible. A material that came
+     * from a loaded draft is left alone even when no segment references it:
+     * a real project keeps a media bin of clips that are not on the timeline
+     * yet, and deleting those would destroy the user's work.
      */
     removeOrphanMaterials() {
         const used = new Set();
@@ -1261,7 +1347,7 @@ export class Draft {
                     used.add(ref);
             }
         }
-        const orphans = this.materialOrder.filter((m) => !used.has(m.id));
+        const orphans = this.materialOrder.filter((m) => !used.has(m.id) && this.createdMaterialIds.has(m.id));
         if (!orphans.length)
             return;
         // A staged file is shared when two materials point at the same path —
@@ -1377,6 +1463,15 @@ export class Draft {
         const materials = {};
         for (const key of EMPTY_MATERIAL_KEYS)
             materials[key] = [];
+        // Material buckets this engine does not model are written back exactly
+        // as they were loaded. The reference implementation does the same with
+        // its imported materials, and dropping them would strip the effects,
+        // stickers, transitions, masks and keyframes of a real project.
+        for (const [bucket, items] of Object.entries(this.unmodelledBuckets)) {
+            if (!materials[bucket])
+                materials[bucket] = [];
+            materials[bucket] = [...materials[bucket], ...items];
+        }
         for (const entry of this.materialOrder) {
             // A photo keeps the "photo" type inside the `videos` bucket, which is
             // where the reference implementation puts every video material — its
@@ -1426,9 +1521,9 @@ export class Draft {
                 export_range: null,
                 extract_audio_last_index: 1,
                 lyrics_recognition_id: "",
-                lyrics_sync: false,
+                lyrics_sync: this.configFlags.lyricsSync,
                 lyrics_taskinfo: [],
-                maintrack_adsorb: false,
+                maintrack_adsorb: this.configFlags.maintrackAdsorb,
                 material_save_mode: 0,
                 multi_language_current: "none",
                 multi_language_list: [],
@@ -1439,7 +1534,7 @@ export class Draft {
                 sticker_max_index: 1,
                 subtitle_keywords_config: null,
                 subtitle_recognition_id: "",
-                subtitle_sync: false,
+                subtitle_sync: this.configFlags.subtitleSync,
                 subtitle_taskinfo: [],
                 system_font_list: [],
                 video_mute: false,
@@ -1487,9 +1582,9 @@ export class Draft {
     }
     serializeSegment(track, seg) {
         // Every segment references its Speed material through extra_material_refs.
-        const extraRefs = [...seg.extraMaterialRefs];
-        if (seg.speedId)
-            extraRefs.push(seg.speedId);
+        // A loaded segment may already carry that reference, so the list is
+        // de-duplicated rather than appended to.
+        const extraRefs = [...new Set([...seg.extraMaterialRefs, ...(seg.speedId ? [seg.speedId] : [])])];
         const base = {
             enable_adjust: true,
             enable_color_correct_adjust: false,
@@ -1620,6 +1715,41 @@ const SUBTITLE_DEFAULT_STYLE = {
 };
 /** Vertical offset that places a text segment low on the canvas. */
 const SUBTITLE_TRANSFORM_Y = -0.8;
+/**
+ * Validates a canvas dimension.
+ *
+ * The value is written straight into `canvas_config`. A string or a
+ * non-positive number there produces a draft JianYing cannot read as
+ * specified, so it is refused rather than written out. A numeric string is
+ * accepted, because a loosely typed client may send one.
+ */
+function normalizeCanvasSize(value, fallback, label) {
+    if (value === undefined || value === null)
+        return fallback;
+    const numeric = typeof value === "number" ? value : Number(value);
+    if (!Number.isFinite(numeric)) {
+        throw new Error(`Invalid ${label}: ${value} must be a number.`);
+    }
+    const rounded = Math.trunc(numeric);
+    if (rounded <= 0) {
+        throw new Error(`Invalid ${label}: ${value} must be greater than zero.`);
+    }
+    return rounded;
+}
+/** Validates a frame rate the same way. */
+function normalizeFps(value) {
+    if (value === undefined || value === null)
+        return 30;
+    const numeric = typeof value === "number" ? value : Number(value);
+    if (!Number.isFinite(numeric)) {
+        throw new Error(`Invalid fps: ${value} must be a number.`);
+    }
+    const rounded = Math.trunc(numeric);
+    if (rounded <= 0) {
+        throw new Error(`Invalid fps: ${value} must be greater than zero.`);
+    }
+    return rounded;
+}
 /**
  * Validates a volume value.
  *

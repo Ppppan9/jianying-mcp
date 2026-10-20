@@ -10,6 +10,7 @@
 
 import fs from "node:fs";
 import path from "node:path";
+import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { McpClient } from "./mcp-client.js";
 
@@ -861,6 +862,160 @@ async function main() {
     "the registry entry's enterprise material is a list",
     Array.isArray(registry.draft_enterprise_info.enterprise_material),
     registry.draft_enterprise_info.enterprise_material,
+  );
+
+  // --- loading a draft must not lose anything ---------------------------
+  // A draft seeded with material this engine does not model — effects,
+  // stickers, transitions and a media bin — must keep all of it when it is
+  // opened and saved again.
+  const seedDir = path.join(DRAFTS_ROOT, "seed");
+  fs.mkdirSync(seedDir, { recursive: true });
+  const seedSource = path.join(__dirname, "..", "scripts", "make_roundtrip_seed.py");
+  execFileSync("python3", [seedSource, seedDir], { timeout: 60_000 });
+  const seedTarget = path.join(DRAFTS_ROOT, "Seeded");
+  fs.mkdirSync(path.join(seedTarget, "materials"), { recursive: true });
+  fs.copyFileSync(
+    path.join(seedDir, "draft_info.json"),
+    path.join(seedTarget, "draft_info.json"),
+  );
+  fs.writeFileSync(path.join(seedTarget, "draft_meta_info.json"), "{}", "utf8");
+
+  const seededBefore = JSON.parse(
+    fs.readFileSync(path.join(seedTarget, "draft_info.json"), "utf8"),
+  );
+  const opened2 = await client.call("jianying_open_draft", { name: "Seeded" });
+  check("a seeded draft can be opened", opened2.ok === true, opened2);
+  await client.call("jianying_save_draft", { name: "Seeded" });
+  const seededAfter = JSON.parse(
+    fs.readFileSync(path.join(seedTarget, "draft_info.json"), "utf8"),
+  );
+
+  for (const bucket of Object.keys(seededBefore.materials ?? {})) {
+    const b = (seededBefore.materials[bucket] ?? []).length;
+    const a = (seededAfter.materials[bucket] ?? []).length;
+    if (b !== a) {
+      check(
+        `loading and saving keeps materials.${bucket}`,
+        false,
+        { before: b, after: a },
+      );
+    }
+  }
+  check(
+    "loading and saving keeps every material bucket",
+    Object.keys(seededBefore.materials ?? {}).every(
+      (bucket) =>
+        (seededBefore.materials[bucket] ?? []).length ===
+        (seededAfter.materials[bucket] ?? []).length,
+    ),
+  );
+  check(
+    "loading and saving keeps the unmodelled material",
+    (seededAfter.materials.effects ?? []).length === 1 &&
+      (seededAfter.materials.stickers ?? []).length === 1 &&
+      (seededAfter.materials.transitions ?? []).length === 1 &&
+      (seededAfter.materials.canvases ?? []).length === 1 &&
+      (seededAfter.materials.masks ?? []).length === 1,
+    {
+      effects: (seededAfter.materials.effects ?? []).length,
+      stickers: (seededAfter.materials.stickers ?? []).length,
+      transitions: (seededAfter.materials.transitions ?? []).length,
+    },
+  );
+  check(
+    "loading and saving keeps the media bin",
+    (seededAfter.materials.videos ?? []).length === 2,
+    (seededAfter.materials.videos ?? []).length,
+  );
+  check(
+    "loading and saving keeps the segment references",
+    (seededAfter.tracks ?? []).reduce(
+      (n: number, t: any) =>
+        n +
+        (t.segments ?? []).reduce(
+          (m: number, s: any) => m + (s.extra_material_refs?.length ?? 0),
+          0,
+        ),
+      0,
+    ) ===
+      (seededBefore.tracks ?? []).reduce(
+        (n: number, t: any) =>
+          n +
+          (t.segments ?? []).reduce(
+            (m: number, s: any) => m + (s.extra_material_refs?.length ?? 0),
+            0,
+          ),
+        0,
+      ),
+  );
+  check(
+    "loading and saving keeps the editing preferences",
+    seededAfter.config?.maintrack_adsorb === seededBefore.config?.maintrack_adsorb &&
+      seededAfter.config?.lyrics_sync === seededBefore.config?.lyrics_sync &&
+      seededAfter.config?.subtitle_sync === seededBefore.config?.subtitle_sync,
+    {
+      maintrack_adsorb: seededAfter.config?.maintrack_adsorb,
+      lyrics_sync: seededAfter.config?.lyrics_sync,
+    },
+  );
+
+  // remove_media on a loaded draft must work, and must not sweep the media
+  // bin that no segment references.
+  const unusedName = "unused_clip.mp4";
+  const unusedPath = path.join(DRAFTS_ROOT, "unused_clip.mp4");
+  fs.writeFileSync(unusedPath, "placeholder", "utf8");
+  const removedLoaded = await client.call("jianying_remove_media", {
+    name: "Seeded", filePath: unusedPath,
+  });
+  check(
+    "remove_media works on a loaded draft",
+    removedLoaded.ok === true,
+    removedLoaded,
+  );
+  await client.call("jianying_save_draft", { name: "Seeded" });
+  const afterRemove = JSON.parse(
+    fs.readFileSync(path.join(seedTarget, "draft_info.json"), "utf8"),
+  );
+  check(
+    "remove_media on a loaded draft does not delete the media bin",
+    (afterRemove.materials.videos ?? []).length === 2,
+    (afterRemove.materials.videos ?? []).length,
+  );
+  await client.call("jianying_close_draft", { name: "Seeded" });
+
+  // The canvas size and frame rate must be validated. A numeric string is
+  // accepted and normalised to a number, like the track index; anything else
+  // is refused.
+  for (const [label, args] of [
+    ["a non-numeric width", { name: "Bad_Size2", width: "abc" as any }],
+    ["a zero width", { name: "Bad_Size3", width: 0 }],
+    ["a negative width", { name: "Bad_Size4", width: -100 }],
+    ["a non-numeric fps", { name: "Bad_Fps", fps: "abc" as any }],
+    ["a zero fps", { name: "Bad_Fps2", fps: 0 }],
+  ]) {
+    let sizeErr: string | null = null;
+    try {
+      await client.call("jianying_create_draft", { ...(args as Record<string, unknown>), overwrite: true });
+    } catch (e: any) {
+      sizeErr = e.message;
+    }
+    check(`an invalid canvas value is refused: ${label}`, sizeErr !== null, sizeErr);
+  }
+
+  // A numeric string must be normalised to a number in the saved draft, not
+  // written through as a string.
+  await client.call("jianying_create_draft", {
+    name: "String_Size", width: "1920" as any, height: "1080" as any, overwrite: true,
+  });
+  await client.call("jianying_save_draft", { name: "String_Size" });
+  const stringSize = JSON.parse(
+    fs.readFileSync(path.join(DRAFTS_ROOT, "String_Size", "draft_info.json"), "utf8"),
+  );
+  check(
+    "a numeric string canvas size is normalised to a number",
+    typeof stringSize.canvas_config.width === "number" &&
+      typeof stringSize.canvas_config.height === "number",
+    stringSize.canvas_config,
   );
 
   // Opening a draft must not leave an empty folder behind.

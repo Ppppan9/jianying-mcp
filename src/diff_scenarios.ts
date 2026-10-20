@@ -21,6 +21,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { execFileSync } from "node:child_process";
 import { McpClient } from "./mcp-client.js";
+import { Draft } from "./draft.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const SERVER = path.join(__dirname, "server.js");
@@ -413,7 +414,24 @@ function fingerprint(draftDir: string): any {
         const c = { ...s };
         delete c.id;
         delete c.material_id;
-        delete c.extra_material_refs;
+        // The references point at uuids, which differ between the two runs.
+        // Their *count* is compared instead — a dropped reference is exactly
+        // the kind of defect this comparison has to catch.
+        //
+        // A reference to a material that does not exist is a defect in the
+        // reference implementation: its text segments point at a speed
+        // material that is never added to the `speeds` bucket. Such a
+        // dangling reference is counted separately so that it cannot mask a
+        // real difference in the references that do resolve.
+        const allIds = new Set<string>();
+        for (const items of Object.values(info.materials ?? {})) {
+          for (const m of items as any[]) {
+            if (m && typeof m.id === "string") allIds.add(m.id);
+          }
+        }
+        const refs = (s.extra_material_refs ?? []) as string[];
+        c.extra_material_refs = refs.filter((r) => allIds.has(r)).length;
+        c.dangling_refs = refs.filter((r) => !allIds.has(r)).length;
         return c;
       }),
     }))
@@ -468,6 +486,18 @@ function diff(a: any, b: any, pathStr = "", keyName = ""): string[] {
   }
   const keys = new Set([...Object.keys(a), ...Object.keys(b)]);
   for (const k of keys) {
+    // A dangling reference is a reference to a material that does not exist.
+    // The reference implementation produces them for text segments; this
+    // project does not. More dangling references is a defect, so only a
+    // difference in the other direction counts.
+    if (k === "dangling_refs") {
+      if (Number(b[k]) > Number(a[k])) {
+        out.push(
+          `${pathStr}.${k}: upstream=${a[k]} mcp=${b[k]} — the draft gained a dangling reference`,
+        );
+      }
+      continue;
+    }
     if (!(k in a)) {
       out.push(`${pathStr}.${k}: only in mcp (${JSON.stringify(b[k])?.slice(0, 80)})`);
       continue;
@@ -559,12 +589,130 @@ async function main() {
   }
 
   console.log(`\n\x1b[1mScenarios: ${pass} matched, ${fail} differed\x1b[0m`);
+
+  // --- load → save round trip -------------------------------------------
+  // The differential scenarios only ever compare freshly generated drafts.
+  // This check covers the path where a draft is opened, edited and saved
+  // again — the path where unmodelled materials can be lost.
+  console.log("\n\x1b[1mLoad → save round trip\x1b[0m");
+  const roundTrip = checkRoundTrip();
+  if (roundTrip.problems.length === 0) {
+    console.log(`  \x1b[32m✓\x1b[0m ${roundTrip.label}`);
+  } else {
+    fail++;
+    console.log(`  \x1b[31m✗\x1b[0m ${roundTrip.label}`);
+    for (const p of roundTrip.problems.slice(0, 12)) console.log(`      ${p}`);
+  }
+
   if (fail) {
     console.log("\nDiffering scenarios:");
     for (const f of failures) console.log(`  - ${f}`);
     process.exit(1);
   }
   process.exit(0);
+}
+
+/**
+ * Verifies that opening a draft, saving it and reopening it keeps everything.
+ *
+ * A draft is seeded with material this engine does not model — the kind a
+ * real project contains: effects, stickers, transitions, and a media bin with
+ * clips that are not on the timeline. Saving must not strip any of it.
+ */
+function checkRoundTrip(): { label: string; problems: string[] } {
+  const problems: string[] = [];
+  const label = "a loaded draft keeps everything it was given";
+
+  const root = path.join(WORK, "roundtrip");
+  fs.rmSync(root, { recursive: true, force: true });
+  const draftDir = path.join(root, "Seeded");
+  fs.mkdirSync(path.join(draftDir, "materials"), { recursive: true });
+
+  // Seed a draft that carries material this engine does not model.
+  const seedDir = path.join(WORK, "seed");
+  execFileSync(UP_PY, [path.join(__dirname, "..", "scripts", "make_roundtrip_seed.py"), seedDir], {
+    encoding: "utf8",
+    timeout: 60_000,
+  });
+  const seeded = JSON.parse(
+    fs.readFileSync(path.join(seedDir, "draft_info.json"), "utf8"),
+  );
+  fs.writeFileSync(
+    path.join(draftDir, "draft_info.json"),
+    JSON.stringify(seeded, null, 4),
+    "utf8",
+  );
+  fs.writeFileSync(path.join(draftDir, "draft_meta_info.json"), "{}", "utf8");
+
+  const before = JSON.parse(
+    fs.readFileSync(path.join(draftDir, "draft_info.json"), "utf8"),
+  );
+
+  // Load it, save it, and compare what came back.
+  const draft = new Draft({
+    name: "Seeded",
+    draftsRoot: root,
+    load: true,
+  });
+  draft.save();
+
+  const after = JSON.parse(
+    fs.readFileSync(path.join(draftDir, "draft_info.json"), "utf8"),
+  );
+
+  // Every material bucket must survive, with the same number of entries.
+  const beforeBuckets = before.materials ?? {};
+  const afterBuckets = after.materials ?? {};
+  for (const bucket of Object.keys(beforeBuckets)) {
+    const b = beforeBuckets[bucket] ?? [];
+    const a = afterBuckets[bucket] ?? [];
+    if (b.length !== a.length) {
+      problems.push(
+        `materials.${bucket}: before=${b.length} after=${a.length} — ` +
+          `${b.length - a.length} entr${b.length - a.length === 1 ? "y" : "ies"} lost`,
+      );
+    }
+  }
+
+  // Every segment must survive, with the same references.
+  const countSegs = (info: any) =>
+    (info.tracks ?? []).reduce(
+      (n: number, t: any) => n + (t.segments?.length ?? 0),
+      0,
+    );
+  if (countSegs(before) !== countSegs(after)) {
+    problems.push(
+      `segments: before=${countSegs(before)} after=${countSegs(after)}`,
+    );
+  }
+
+  const countRefs = (info: any) =>
+    (info.tracks ?? []).reduce(
+      (n: number, t: any) =>
+        n +
+        (t.segments ?? []).reduce(
+          (m: number, s: any) => m + (s.extra_material_refs?.length ?? 0),
+          0,
+        ),
+      0,
+    );
+  if (countRefs(before) !== countRefs(after)) {
+    problems.push(
+      `extra_material_refs: before=${countRefs(before)} after=${countRefs(after)} — ` +
+        `references were dropped`,
+    );
+  }
+
+  // The editing preferences must survive too.
+  for (const key of ["maintrack_adsorb", "lyrics_sync", "subtitle_sync"]) {
+    if (before.config?.[key] !== after.config?.[key]) {
+      problems.push(
+        `config.${key}: before=${before.config?.[key]} after=${after.config?.[key]}`,
+      );
+    }
+  }
+
+  return { label, problems };
 }
 
 main().catch((e) => {
