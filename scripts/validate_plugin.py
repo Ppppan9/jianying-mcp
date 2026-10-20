@@ -219,6 +219,28 @@ def main() -> int:
         lowered[rel] = str(p.relative_to(root))
     check("no case-insensitive path collisions", not collisions, "; ".join(collisions[:5]))
 
+    # --- the bundled server must be complete ------------------------------
+    # The server entry point imports its own modules by relative path. If one
+    # of those files is not in the bundle, the plugin starts and dies with
+    # ERR_MODULE_NOT_FOUND — and a file-by-file comparison against the build
+    # output does not notice, because the missing file is simply absent from
+    # both sides.
+    server_entry = root / "server" / "server.js"
+    if server_entry.exists():
+        missing = []
+        text = server_entry.read_text(encoding="utf8")
+        for spec in re.findall(r"""from\s+["'](\.[^"']+)["']""", text):
+            target = (server_entry.parent / spec).resolve()
+            if not target.exists():
+                missing.append(spec)
+        check(
+            "every module the server imports is in the bundle",
+            not missing,
+            "missing: " + ", ".join(missing) if missing else "",
+        )
+    else:
+        check("the bundled server entry point exists", False, str(server_entry))
+
     print("\n" + "=" * 60)
     if errors:
         print(f"FAILED — {len(errors)} error(s)")

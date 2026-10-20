@@ -33,6 +33,9 @@ jobs:
       - name: Guard coverage — every refusal must actually happen
         run: node dist/guard_coverage.js ./test-media ./out_drafts/guards
 
+      - name: Protocol check — a request that arrives must get an answer
+        run: node dist/protocol_check.js
+
       - name: Generate the hands-on verification drafts
         run: node dist/make_verify_drafts.js ./verify-media ./verify-drafts
 
@@ -43,6 +46,20 @@ jobs:
         run: |
           diff -u dist/server.js plugin/server/server.js
           diff -u dist/draft.js  plugin/server/draft.js
+          diff -u dist/schema_validate.js plugin/server/schema_validate.js
+
+      # The bundle is what users actually run. Comparing it with the build
+      # output only proves the files match — it does not prove the server
+      # starts. A missing module in the bundle is invisible to a diff.
+      - name: The bundled Plugin server starts and answers
+        run: |
+          printf '%s\n%s\n' \
+            '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}' \
+            '{"jsonrpc":"2.0","id":2,"method":"tools/list"}' \
+            | node plugin/server/server.js \
+            | tee /tmp/plugin-bundle.out \
+            | grep -q '"jianying_add_video"' \
+            && grep -q '"protocolVersion"' /tmp/plugin-bundle.out
 
       - name: Check that the Plugin Skill matches the source Skill
         run: diff -u skills/jianying-editor/SKILL.md plugin/skills/jianying-editor/SKILL.md

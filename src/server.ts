@@ -24,6 +24,7 @@ import {
   sanitizeDraftName,
   splitSubtitleLines,
 } from "./draft.js";
+import { validateAgainstSchema } from "./schema_validate.js";
 
 const PROTOCOL_VERSION = "2024-11-05";
 const SERVER_INFO = { name: "jianying-mcp", version: "1.0.0" };
@@ -148,6 +149,19 @@ const S = {
     description: `${description} (seconds as a number, or a duration string such as "1m30s")`,
     anyOf: [{ type: "number" }, { type: "string" }],
   }),
+  /**
+   * A number the engine normalises with `Number()`.
+   *
+   * The track index, the canvas size and the frame rate all read their value
+   * through `Number()`, so a numeric string means the same thing as the
+   * number. A string that is not a number is refused instead of silently
+   * becoming zero.
+   */
+  numeric: (description: string): Schema => ({
+    description: `${description} (a number, or a numeric string such as "1")`,
+    type: "number",
+    acceptsNumericString: true,
+  }),
 };
 
 const textStyleProperties: Record<string, Schema> = {
@@ -226,9 +240,9 @@ const TOOLS: ToolDef[] = [
       "Create a new JianYing draft and return its structure. Set width/height to match the source footage (1080x1920 for 9:16 vertical, 1920x1080 for 16:9). When omitted, the canvas adopts the first video's resolution automatically.",
     inputSchema: S.object("Create a new JianYing draft", {
       name: S.string("Draft name"),
-      width: S.number("Canvas width"),
-      height: S.number("Canvas height"),
-      fps: S.number("Frame rate (default 30)"),
+      width: S.numeric("Canvas width"),
+      height: S.numeric("Canvas height"),
+      fps: S.numeric("Frame rate (default 30)"),
       draftsRoot: S.string("Override the drafts root directory"),
       overwrite: S.boolean(
         "Replace an existing draft with the same name. Off by default, because overwriting discards the existing project.",
@@ -308,7 +322,7 @@ const TOOLS: ToolDef[] = [
       start: S.duration("Timeline start"),
       sourceStart: S.duration("Offset inside the source file"),
       duration: S.duration("Clip length; defaults to the rest of the file"),
-      track: S.number("Video track index (0 = bottom layer, 1 = overlay)"),
+      track: S.numeric("Video track index (0 = bottom layer, 1 = overlay)"),
       volume: S.number("Clip volume 0..1"),
       speed: S.number("Playback speed multiplier"),
     }, ["name", "filePath"]),
@@ -342,7 +356,7 @@ const TOOLS: ToolDef[] = [
       start: S.duration("Timeline start"),
       sourceStart: S.duration("Offset inside the source file"),
       duration: S.duration("Clip length"),
-      track: S.number("Audio track index (0 = BGM, 1 = narration)"),
+      track: S.numeric("Audio track index (0 = BGM, 1 = narration)"),
       volume: S.number("Volume 0..1"),
       fadeIn: S.duration("Fade-in length"),
       fadeOut: S.duration("Fade-out length"),
@@ -379,7 +393,7 @@ const TOOLS: ToolDef[] = [
       text: S.string("Text content"),
       start: S.duration("Start time"),
       duration: S.duration("Duration"),
-      track: S.number("Text track index (0 = captions, 1 = titles/overlays)"),
+      track: S.numeric("Text track index (0 = captions, 1 = titles/overlays)"),
       style: S.object("Text style", textStyleProperties),
     }, ["name", "text", "start", "duration"]),
     handler: (args) => {
@@ -407,7 +421,7 @@ const TOOLS: ToolDef[] = [
       start: S.duration("Start time"),
       duration: S.duration("Total window"),
       maxChars: S.number("Max characters per line (default 18)"),
-      track: S.number("Text track index (0 = captions, 1 = titles/overlays)"),
+      track: S.numeric("Text track index (0 = captions, 1 = titles/overlays)"),
       style: S.object("Text style", textStyleProperties),
     }, ["name", "script", "start", "duration"]),
     handler: (args) => {
@@ -601,10 +615,20 @@ function replyError(id: unknown, code: number, message: string) {
 }
 
 async function handleMessage(msg: any) {
+  // A JSON-RPC message must be an object. Anything else — a bare number, a
+  // string, null — used to be destructured straight away, which threw and
+  // left the caller waiting for a reply that never came.
+  if (msg === null || typeof msg !== "object" || Array.isArray(msg)) {
+    replyError(null, -32600, "Invalid Request: a JSON-RPC message must be an object.");
+    return;
+  }
+
   const { id, method, params } = msg;
 
-  // Notifications carry no id and expect no response.
-  if (id === undefined || id === null) return;
+  // A notification carries no id at all and expects no response. A request
+  // whose id is null is still a request, so the presence of the key is what
+  // decides — otherwise the caller waits forever for a reply.
+  if (!Object.prototype.hasOwnProperty.call(msg, "id")) return;
 
   try {
     await dispatch(id, method, params);
@@ -621,6 +645,11 @@ async function handleMessage(msg: any) {
 }
 
 async function dispatch(id: unknown, method: string, params: any) {
+  if (typeof method !== "string" || method.length === 0) {
+    replyError(id, -32600, "Invalid Request: the method must be a string.");
+    return;
+  }
+
   switch (method) {
     case "initialize":
       reply(id, {
@@ -651,8 +680,29 @@ async function dispatch(id: unknown, method: string, params: any) {
         replyError(id, -32602, `Unknown tool: ${toolName}`);
         return;
       }
+
+      // The schema is checked here, not left to the client. A missing
+      // required field used to reach the engine as `undefined`, and the
+      // engine made a draft out of it.
+      const args = params?.arguments ?? {};
+      const problems = validateAgainstSchema(tool.inputSchema, args);
+      if (problems.length > 0) {
+        reply(id, {
+          isError: true,
+          content: [
+            {
+              type: "text",
+              text:
+                `Invalid arguments for ${tool.name}:\n` +
+                problems.map((p) => `- ${p}`).join("\n"),
+            },
+          ],
+        });
+        return;
+      }
+
       try {
-        const result = await tool.handler(params?.arguments ?? {});
+        const result = await tool.handler(args);
         reply(id, {
           content: [{ type: "text", text: stringifyResult(result) }],
         });
@@ -682,14 +732,90 @@ let buffer = "";
  */
 const MAX_BUFFER_BYTES = 16 * 1024 * 1024;
 
+/**
+ * Splits a line into the top-level JSON values it contains.
+ *
+ * The transport puts one message per line, but a peer that writes two
+ * messages without a newline between them used to lose the second one
+ * entirely. The scan is string-aware, so a brace inside a string does not
+ * end the value.
+ */
+function splitJsonValues(line: string): { values: unknown[]; failures: number } {
+  const values: unknown[] = [];
+  let failures = 0;
+  let index = 0;
+
+  while (index < line.length) {
+    while (index < line.length && /\s/.test(line[index])) index++;
+    if (index >= line.length) break;
+
+    const start = index;
+    const first = line[index];
+
+    if (first === "{" || first === "[") {
+      let depth = 0;
+      let inString = false;
+      let escaped = false;
+      for (; index < line.length; index++) {
+        const ch = line[index];
+        if (inString) {
+          if (escaped) {
+            escaped = false;
+            continue;
+          }
+          if (ch === "\\") {
+            escaped = true;
+            continue;
+          }
+          if (ch === '"') inString = false;
+          continue;
+        }
+        if (ch === '"') {
+          inString = true;
+          continue;
+        }
+        if (ch === "{" || ch === "[") depth++;
+        else if (ch === "}" || ch === "]") {
+          depth--;
+          if (depth === 0) {
+            index++;
+            break;
+          }
+        }
+      }
+      const chunk = line.slice(start, index);
+      try {
+        values.push(JSON.parse(chunk));
+      } catch {
+        failures++;
+      }
+      continue;
+    }
+
+    // A bare primitive runs to the end of the line.
+    const chunk = line.slice(start).trim();
+    index = line.length;
+    try {
+      values.push(JSON.parse(chunk));
+    } catch {
+      failures++;
+    }
+  }
+
+  return { values, failures };
+}
+
 process.stdin.setEncoding("utf8");
 process.stdin.on("data", (chunk) => {
   buffer += chunk;
   if (buffer.length > MAX_BUFFER_BYTES) {
-    process.stderr.write(
-      `jianying-mcp: input buffer exceeded ${MAX_BUFFER_BYTES} bytes without a newline; dropping the connection.\n`,
-    );
-    buffer = "";
+    // stderr is the log channel, and the host reads it; write it synchronously
+    // so the reason is not lost when the process goes away.
+    try {
+      fs.writeSync(2, `jianying-mcp: input buffer exceeded ${MAX_BUFFER_BYTES} bytes without a newline; dropping the connection.\n`);
+    } catch {
+      /* the log channel is gone too */
+    }
     process.exit(1);
   }
   let index: number;
@@ -697,23 +823,53 @@ process.stdin.on("data", (chunk) => {
     const line = buffer.slice(0, index).trim();
     buffer = buffer.slice(index + 1);
     if (!line) continue;
-    let parsed: any;
-    try {
-      parsed = JSON.parse(line);
-    } catch {
-      continue;
+
+    const { values, failures } = splitJsonValues(line);
+    for (const value of values) {
+      if (Array.isArray(value)) {
+        for (const m of value) void handleMessage(m);
+      } else {
+        void handleMessage(value);
+      }
     }
-    if (Array.isArray(parsed)) {
-      for (const m of parsed) void handleMessage(m);
-    } else {
-      void handleMessage(parsed);
+
+    // A line that held nothing usable gets a parse error, so the caller
+    // learns the request was lost instead of waiting for a reply that never
+    // comes. A line that held one good request and some rubbish still gets
+    // its reply; the rubbish is only logged.
+    if (failures > 0 && values.length === 0) {
+      replyError(null, -32700, "Parse error: the line is not valid JSON.");
+    } else if (failures > 0) {
+      fs.writeSync(2, "jianying-mcp: ignored a malformed fragment on an otherwise readable line.\n");
     }
   }
 });
 
-process.stdin.on("end", () => process.exit(0));
-process.on("SIGTERM", () => process.exit(0));
-process.on("SIGINT", () => process.exit(0));
+/**
+ * The transport is gone, so the server is done — but a tool call that is
+ * still running must not be cut off half-way. Exiting right away could
+ * truncate a save, so the process is allowed to drain and only forced out
+ * if something refuses to finish.
+ */
+function shutdown(graceMs: number) {
+  process.exitCode = 0;
+  const timer = setTimeout(() => process.exit(0), graceMs);
+  timer.unref();
+}
+
+process.stdin.on("end", () => shutdown(10_000));
+process.on("SIGTERM", () => shutdown(2_000));
+process.on("SIGINT", () => shutdown(2_000));
+
+// A peer that closes the pipe makes stdout unwritable. Writing to it would
+// raise EPIPE and take the server down in the middle of a reply.
+process.stdout.on("error", (error: NodeJS.ErrnoException) => {
+  if (error.code === "EPIPE") {
+    process.exit(0);
+    return;
+  }
+  process.stderr.write(`jianying-mcp stdout error: ${error.message}\n`);
+});
 
 // A crash in one request must not take the server down and break the host
 // session. Log to stderr (stdout carries the protocol) and keep serving.

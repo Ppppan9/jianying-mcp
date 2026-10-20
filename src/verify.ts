@@ -673,26 +673,46 @@ async function main() {
     textTracks.map((t: any) => t.index),
   );
 
-  // A malformed track index must not write a null render index into the
-  // draft, and a numeric string must still select the intended track.
-  // Each probe gets its own time window so the clips cannot overlap.
-  const malformedTracks = ["abc", null, NaN, -1];
-  for (let i = 0; i < malformedTracks.length; i++) {
-    const bad = malformedTracks[i];
-    let ok = true;
+  // An index that cannot be read as a number is refused outright. It used to
+  // be normalised silently, which put the clip on track 0 — a wrong answer
+  // that looked like a success.
+  const unusableTracks: Array<[string, unknown]> = [
+    ["a word", "abc"],
+    ["null", null],
+    ["NaN", NaN],
+    ["an object", { a: 1 }],
+  ];
+  for (let i = 0; i < unusableTracks.length; i++) {
+    const [label, bad] = unusableTracks[i];
+    let refused = false;
+    let reason = "";
+    try {
+      await client.call("jianying_add_video", {
+        name: "Draft: v2", filePath: vid1, start: i * 2, duration: 1, track: bad as any,
+      });
+    } catch (e: any) {
+      refused = /must be a number/.test(e.message);
+      reason = e.message.slice(0, 100);
+    }
+    check(`an unusable track index is refused: ${label}`, refused, reason);
+  }
+
+  // A negative index is a number, so it is accepted and normalised to the
+  // bottom track. That may collide with a clip that is already there, which
+  // is a placement conflict rather than a rendering defect.
+  {
+    let tolerated = false;
     let reason = "";
     try {
       const probe = await client.call("jianying_add_video", {
-        name: "Draft: v2", filePath: vid1, start: i * 2, duration: 1, track: bad as any,
+        name: "Draft: v2", filePath: vid1, start: 6, duration: 1, track: -1,
       });
-      ok = probe.ok === true;
+      tolerated = probe.ok === true;
     } catch (e: any) {
-      // A malformed index may normalise onto a track that is already used;
-      // that is a placement conflict, not a rendering defect.
-      ok = /SegmentOverlap/.test(e.message);
+      tolerated = /SegmentOverlap/.test(e.message);
       reason = e.message.slice(0, 80);
     }
-    check(`a malformed track index is tolerated: ${String(bad)}`, ok, reason);
+    check("a negative track index is normalised, not written as-is", tolerated, reason);
   }
   await client.call("jianying_save_draft", { name: "Draft: v2" });
   const sanitizedDir = path.join(DRAFTS_ROOT, "Draft_ v2");

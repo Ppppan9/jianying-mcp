@@ -177,20 +177,41 @@ node dist/gen_compare.js ./compare_drafts/mcp
 python3 scripts/compare_drafts.py \
     compare_drafts/upstream/Compare_Up \
     compare_drafts/mcp/Compare_Mcp
+
+# 4. every refusal must actually happen
+node dist/guard_coverage.js ./test-media ./out_drafts/guards
+
+# 5. the wire protocol must never leave a caller waiting
+node dist/protocol_check.js
+
+# 6. the suite must be able to fail
+node dist/mutation_check.js ./test-media
 ```
 
 ```
-[1] verify.js            Result: 143 passed, 0 failed
+[1] verify.js            Result: 164 passed, 0 failed
 [2] diff_scenarios.js    Scenarios: 12 matched, 0 differed
 [3] compare_drafts.py    [A] Structural diff: 0 difference(s)
                          VERDICT: PASS
 [4] compare_meta_info.py VERDICT: MATCH (25 fields vs the reference template)
 [5] guard_coverage.js  Guards: 34 enforced, 0 not enforced
+[6] protocol_check.js   Protocol: 24 passed, 0 failed
+[7] mutation_check.js   Mutations: 22 of 22 caught, 0 survived
 ```
 
 The fifth suite is a different question from the others: not "does the draft
 come out right" but "does every refusal actually happen". A guard that is
 never reached is a guard that does not protect.
+
+The sixth suite asks the same question of the wire protocol: a request that
+arrives must always get an answer, and a message the server cannot read must
+produce an error rather than silence. It found that a malformed line, a
+non-object message and a request with a null id were all dropped without a
+reply — the caller waited forever for an answer that never came.
+
+The seventh suite is the one that keeps the other six honest. It breaks the
+engine on purpose, one rule at a time, and the suite has to notice. A green
+suite proves nothing until you know it can go red.
 
 The differential harness also runs a **load → save round trip**: a draft
 seeded with effects, stickers, transitions and a media bin is opened, saved
@@ -368,17 +389,23 @@ redistributed here.
 用上游实现当预言机，分三层逐字段对比：
 
 ```
-[1] verify.js            Result: 70 passed, 0 failed
+[1] verify.js            Result: 164 passed, 0 failed
 [2] diff_scenarios.js    Scenarios: 12 matched, 0 differed
 [3] compare_drafts.py    [A] Structural diff: 0 difference(s)
                          VERDICT: PASS
 [4] compare_meta_info.py VERDICT: MATCH (25 fields vs the reference template)
 [5] guard_coverage.js  Guards: 34 enforced, 0 not enforced
+[6] protocol_check.js   Protocol: 24 passed, 0 failed
+[7] mutation_check.js   Mutations: 22 of 22 caught, 0 survived
 ```
 
 The fifth suite is a different question from the others: not "does the draft
 come out right" but "does every refusal actually happen". A guard that is
 never reached is a guard that does not protect.
+
+第六个套件问的是同一个问题的协议层版本：**进来的请求一定要有回音**，读不懂的消息要报错而不是装作没听见。它查出了畸形行、非对象消息、`id: null` 的请求全都被静默丢弃 —— 调用方会一直等一个永远不会来的回复。
+
+第七个套件负责让前六个不敢说谎：它一次故意破坏一条规则，套件必须发现。**绿色的套件在证明它能变红之前，什么都不能证明。**
 
 The differential harness also runs a **load → save round trip**: a draft
 seeded with effects, stickers, transitions and a media bin is opened, saved
@@ -397,13 +424,14 @@ generate-and-compare check cannot see.
 - **源时长超出素材**被拒绝
 - **含视频轨的文件不能当音频素材**，**纯音频文件也不能当视频素材**
 - **负数的起点 / 时长 / 淡入淡出**被拒绝
+- **必填参数缺失、类型不对、参数名拼错**被拒绝（拼错不会被忽略 —— 否则 `duraton` 会让片段落到错误位置）
 - **重复打开同名草稿**被拒绝，避免未保存的时间轴被静默丢弃
 - **磁盘上已有同名草稿**时不会自动覆盖，必须显式传 `overwrite=true`
 - **覆盖非草稿目录**被拒绝
 - **危险草稿名**（`..`、`.`、Windows 设备名）被拒绝
 - **SRT 导出不会覆盖已有文件**，也**拒绝非 `.srt` 路径**（路径可能指向你的源素材）
 
-被拒绝的调用**不会留下垃圾**：不残留孤儿素材，也不残留复制进草稿的素材文件。
+被拒绝的调用**不会留下垃圾**：不残留孤儿素材，也不残留复制进草稿的素材文件，连一个叫 `undefined` 的空草稿都不会建出来。
 
 ### 验证过程
 

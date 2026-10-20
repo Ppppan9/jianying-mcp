@@ -122,6 +122,8 @@ jianying_close_draft    name=...
 
 | 情况 | 报错 |
 |---|---|
+| 必填参数缺失 / 类型不对 | `Invalid arguments for ...`（例如 `"name" is required`） |
+| 参数名拼错（如 `duraton`） | `unknown argument "duraton"`（**不会被忽略**，否则片段会落到错误位置） |
 | 同轨道片段重叠 | `SegmentOverlap` |
 | 源时长超出素材 | `exceeds media duration` |
 | 拿含视频轨的文件当音频 | `must not contain a video track` |
@@ -139,7 +141,9 @@ jianying_close_draft    name=...
 
 看到这些报错就按提示改参数，**不要绕过去** —— 它们拦下的都是剪映会渲染错乱、或者会毁掉你已有文件的情况。
 
-被拒绝的调用**不会留下垃圾**：不会残留孤儿素材，也不会残留复制到草稿里的素材文件。
+被拒绝的调用**不会留下垃圾**：不会残留孤儿素材，也不会残留复制到草稿里的素材文件，连一个叫 `undefined` 的空草稿都不会建出来。
+
+`track` / `width` / `height` / `fps` 这几个参数写成数字字符串（`track="1"`）会被正常识别；写成非数字（`track="第一轨"`）会直接报错，不会悄悄变成 0 号轨。
 
 ## 打开已有草稿并续编
 

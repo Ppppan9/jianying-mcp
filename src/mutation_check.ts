@@ -102,6 +102,57 @@ const MUTATIONS: Array<{ name: string; from: string; to: string; file?: string }
     from: "      fs.writeFileSync(tmp, content, \"utf8\");\n      pending.push({ tmp, final });",
     to: "      fs.writeFileSync(final, content, \"utf8\");\n      pending.push({ tmp: final, final });",
   },
+  {
+    // The schema is published to the client, but the server has to keep it.
+    // Without this check a missing field becomes "undefined" and a misspelled
+    // key is ignored.
+    name: "argument validation disabled",
+    from: "      const problems = validateAgainstSchema(tool.inputSchema, args);",
+    to: "      const problems: string[] = [];",
+    file: "server.ts",
+  },
+  {
+    name: "required fields not checked",
+    from: "      for (const key of schema.required ?? []) {",
+    to: "      for (const key of [] as string[]) {",
+    file: "schema_validate.ts",
+  },
+  {
+    name: "unknown arguments ignored",
+    from: "      const unknown = Object.keys(obj).filter((key) => !(key in properties));",
+    to: "      const unknown: string[] = [];",
+    file: "schema_validate.ts",
+  },
+  {
+    name: "numeric strings refused",
+    from: "      if (schema.acceptsNumericString && typeof value === \"string\") {",
+    to: "      if (false && schema.acceptsNumericString && typeof value === \"string\") {",
+    file: "schema_validate.ts",
+  },
+  {
+    name: "a malformed line is dropped instead of reported",
+    from: "      replyError(null, -32700, \"Parse error: the line is not valid JSON.\");",
+    to: "      void 0;",
+    file: "server.ts",
+  },
+  {
+    name: "a non-object message is accepted",
+    from: "  if (msg === null || typeof msg !== \"object\" || Array.isArray(msg)) {",
+    to: "  if (false) {",
+    file: "server.ts",
+  },
+  {
+    name: "a request with a null id is treated as a notification",
+    from: "  if (!Object.prototype.hasOwnProperty.call(msg, \"id\")) return;",
+    to: "  if (msg.id === undefined || msg.id === null) return;",
+    file: "server.ts",
+  },
+  {
+    name: "two messages on one line are not split",
+    from: "    const { values, failures } = splitJsonValues(line);",
+    to: "    const values = [JSON.parse(line)]; const failures = 0;",
+    file: "server.ts",
+  },
 ];
 
 function run(cmd: string, args: string[], env: NodeJS.ProcessEnv = {}): boolean {
@@ -121,8 +172,12 @@ function run(cmd: string, args: string[], env: NodeJS.ProcessEnv = {}): boolean 
 function suitePasses(): boolean {
   const work = fs.mkdtempSync(path.join(os.tmpdir(), "jy-mut-"));
   try {
-    const ok = run("node", [path.join(BUILD, "verify.js"), MEDIA, work]);
-    return ok;
+    // Both suites have to pass. The functional suite covers the engine, the
+    // protocol suite covers the wire layer; a mutation that only one of them
+    // can see is still a hole.
+    if (!run("node", [path.join(BUILD, "verify.js"), MEDIA, work])) return false;
+    if (!run("node", [path.join(BUILD, "protocol_check.js")])) return false;
+    return true;
   } finally {
     fs.rmSync(work, { recursive: true, force: true });
   }
@@ -159,10 +214,19 @@ async function main() {
 
   const serverSrc = path.join(REPO, "src", "server.ts");
   const serverOriginal = fs.readFileSync(serverSrc, "utf8");
+  const schemaSrc = path.join(REPO, "src", "schema_validate.ts");
+  const schemaOriginal = fs.readFileSync(schemaSrc, "utf8");
+
+  const sources: Record<string, { path: string; original: string }> = {
+    "draft.ts": { path: DRAFT_SRC, original },
+    "server.ts": { path: serverSrc, original: serverOriginal },
+    "schema_validate.ts": { path: schemaSrc, original: schemaOriginal },
+  };
 
   for (const mutation of MUTATIONS) {
-    const target = mutation.file === "server.ts" ? serverSrc : DRAFT_SRC;
-    const base = mutation.file === "server.ts" ? serverOriginal : original;
+    const source = sources[mutation.file ?? "draft.ts"];
+    const target = source.path;
+    const base = source.original;
     if (!base.includes(mutation.from)) {
       console.log(
         `  \x1b[33m?\x1b[0m ${mutation.name} — the snippet no longer matches, skipping`,
@@ -190,7 +254,11 @@ async function main() {
     fs.writeFileSync(target, base, "utf8");
   }
 
-  // Restore and rebuild so the tree is left in a good state.
+  // Restore every file this run may have touched and rebuild, so the tree is
+  // left exactly as it was found.
+  for (const source of Object.values(sources)) {
+    fs.writeFileSync(source.path, source.original, "utf8");
+  }
   build();
   fs.rmSync(scratch, { recursive: true, force: true });
 
