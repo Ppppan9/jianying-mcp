@@ -1,0 +1,42 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Type-check and build
+        run: npm run build
+
+      - name: Generate synthetic test media
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg
+          bash scripts/make_test_media.sh
+
+      - name: End-to-end verification
+        run: node dist/verify.js
+
+      - name: Validate the Plugin package
+        run: python3 scripts/validate_plugin.py plugin
+
+      - name: Verify the Plugin bundle matches the build output
+        run: |
+          diff -u dist/server.js plugin/server/server.js
+          diff -u dist/draft.js  plugin/server/draft.js
+
+      - name: Check that the Plugin Skill matches the source Skill
+        run: diff -u skills/jianying-editor/SKILL.md plugin/skills/jianying-editor/SKILL.md

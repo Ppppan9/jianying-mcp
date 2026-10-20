@@ -1,0 +1,39 @@
+# Dependencies
+node_modules/
+
+# Build output
+# `plugin/` contains a prebuilt copy of the server so the Plugin package can be
+# used without a build step. `dist/` at the repo root is generated.
+dist/
+*.tsbuildinfo
+
+# Test and comparison artifacts
+compare_drafts/
+out_drafts/
+verify_drafts*/
+final_verify/
+plugin_e2e/
+ad_drafts/
+golden_drafts/
+baseline_drafts/
+media/
+ad_media/
+
+# Synthetic test media (generate with scripts/make_test_media.sh)
+test-media/
+
+# Upstream clone used as the comparison oracle
+jianying-editor-skill/
+.venv-upstream/
+
+# Reverse-engineering evidence (large)
+rea-out/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+.idea/
+.vscode/
+*.swp

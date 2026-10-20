@@ -1,0 +1,13 @@
+{
+  "schemaVersion": 1,
+  "mcpServers": {
+    "jianying-editor": {
+      "type": "stdio",
+      "command": "node",
+      "args": ["./server/server.js"],
+      "env": {},
+      "description": "生成剪映专业版工程草稿：建工程、排素材、加字幕、配音配乐、保存草稿、导出 SRT。",
+      "timeout": 60000
+    }
+  }
+}

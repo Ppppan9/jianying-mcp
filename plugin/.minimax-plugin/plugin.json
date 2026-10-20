@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "name": "jianying-editor",
+  "displayName": "剪映自动剪辑",
+  "version": "1.0.0",
+  "description": "用 MiniMax 原生 MCP 工具自动生成剪映专业版工程草稿：素材排布、字幕、配音、BGM、封面素材。纯本地文件操作，零运行时依赖，macOS 与 Windows 通用。",
+  "author": "阿涛",
+  "icon": "icon.png",
+  "darkIcon": "icon-dark.png",
+  "category": "Studio",
+  "exampleQueries": [
+    "帮我把这批素材剪成一条 30 秒的竖屏广告，前 3 秒要有钩子",
+    "用剪映工具生成一个带配音和字幕的草稿",
+    "先探一下这些视频素材的时长和分辨率，再排时间轴",
+    "把这段口播做成剪映草稿，配上轻快 BGM 和字幕"
+  ],
+  "apps": [],
+  "mcpServers": ["servers.mcp.json"],
+  "skills": ["skills/jianying-editor/SKILL.md"],
+  "agents": [],
+  "hooks": []
+}
