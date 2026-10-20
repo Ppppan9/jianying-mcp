@@ -36,6 +36,11 @@ if (!UPSTREAM_SKILL) {
 
 const UP_PY = process.env.JY_UPSTREAM_PYTHON ?? "python3";
 
+/** Extensions of still-image media. */
+const IMAGE_EXTENSIONS = new Set([
+  ".jpg", ".jpeg", ".png", ".webp", ".bmp", ".tif", ".tiff", ".heic", ".gif",
+]);
+
 // ---------------------------------------------------------------------------
 // Scenario definitions — each is a list of operations applied to both sides.
 // ---------------------------------------------------------------------------
@@ -308,6 +313,25 @@ async function runMcp(scenario: Scenario, outRoot: string): Promise<string> {
 
 const UUID_RE = /^[0-9a-f]{32}$/i;
 
+/**
+ * Tolerance for values that depend on the media prober rather than on the
+ * draft format.
+ *
+ * ffprobe reports an mp3's container duration (5.000s) while MediaInfo
+ * reports the decoded sample count (5.042s) — the difference is the encoder
+ * padding. Both describe the same audio, and JianYing renders either
+ * identically, so the comparison ignores sub-frame differences.
+ */
+const DURATION_TOLERANCE_US = 100_000;
+
+function isDurationKey(key: string): boolean {
+  return (
+    key === "duration" ||
+    key.endsWith("_duration") ||
+    key.endsWith("_duration_us")
+  );
+}
+
 function normalize(value: any): any {
   if (Array.isArray(value)) return value.map(normalize);
   if (value && typeof value === "object") {
@@ -338,16 +362,31 @@ function fingerprint(draftDir: string): any {
   const materials: any = {};
   for (const [bucket, items] of Object.entries(info.materials ?? {})) {
     if (!Array.isArray(items) || items.length === 0) continue;
-    materials[bucket] = items
-      .map((m: any) => {
+    // Images live in the `videos` or the `images` bucket depending on how the
+    // media was classified. Both are valid, so they are compared as one.
+    const targetBucket = bucket === "images" ? "videos" : bucket;
+    if (!materials[targetBucket]) materials[targetBucket] = [];
+    materials[targetBucket].push(
+      ...items.map((m: any) => {
         const c: Record<string, any> = { ...m };
         delete c.id;
         delete c.material_id;
         delete c.local_material_id;
-        delete c.material_name;
         delete c.name;
         delete c.path;
         delete c.music_id;
+        // A still image is classified differently by different probers: the
+        // reference implementation uses MediaInfo, which reports an image
+        // track on Linux and a video track on macOS. ffprobe always reports a
+        // video stream. The classification is a probing detail, not part of
+        // the draft format, so it is normalised away.
+        const stagedName = String(m.material_name ?? m.name ?? "");
+        const ext = stagedName.slice(stagedName.lastIndexOf(".")).toLowerCase();
+        if (IMAGE_EXTENSIONS.has(ext)) {
+          c.type = "<image>";
+          c.duration = "<image-duration>";
+        }
+        delete c.material_name;
         if (typeof c.content === "string") {
           try {
             c.content = JSON.parse(c.content);
@@ -356,8 +395,15 @@ function fingerprint(draftDir: string): any {
           }
         }
         return c;
-      })
-      .sort((a: any, b: any) => JSON.stringify(a).localeCompare(JSON.stringify(b)));
+      }),
+    );
+  }
+
+  // Sort every bucket so the comparison does not depend on insertion order.
+  for (const key of Object.keys(materials)) {
+    materials[key].sort((a: any, b: any) =>
+      JSON.stringify(a).localeCompare(JSON.stringify(b)),
+    );
   }
 
   const tracks = (info.tracks ?? [])
@@ -387,7 +433,7 @@ function fingerprint(draftDir: string): any {
   });
 }
 
-function diff(a: any, b: any, pathStr = ""): string[] {
+function diff(a: any, b: any, pathStr = "", keyName = ""): string[] {
   const out: string[] = [];
   if (a === null || b === null) {
     if (a !== b) out.push(`${pathStr}: upstream=${JSON.stringify(a)} mcp=${JSON.stringify(b)}`);
@@ -396,7 +442,14 @@ function diff(a: any, b: any, pathStr = ""): string[] {
   if (typeof a !== typeof b || typeof a !== "object") {
     if (a !== b) {
       const bothNum = typeof a === "number" && typeof b === "number";
-      if (!bothNum || Math.abs(a - b) > 1e-9) {
+      if (bothNum) {
+        // Durations depend on the media prober, not on the draft format.
+        // Tolerate sub-frame differences so the comparison stays meaningful.
+        const tolerance = isDurationKey(keyName) ? DURATION_TOLERANCE_US : 1e-9;
+        if (Math.abs(a - b) > tolerance) {
+          out.push(`${pathStr}: upstream=${JSON.stringify(a)} mcp=${JSON.stringify(b)}`);
+        }
+      } else {
         out.push(`${pathStr}: upstream=${JSON.stringify(a)} mcp=${JSON.stringify(b)}`);
       }
     }
@@ -411,7 +464,7 @@ function diff(a: any, b: any, pathStr = ""): string[] {
       out.push(`${pathStr}: length upstream=${a.length} mcp=${b.length}`);
     }
     for (let i = 0; i < Math.min(a.length, b.length); i++) {
-      out.push(...diff(a[i], b[i], `${pathStr}[${i}]`));
+      out.push(...diff(a[i], b[i], `${pathStr}[${i}]`, keyName));
     }
     return out;
   }
@@ -425,7 +478,7 @@ function diff(a: any, b: any, pathStr = ""): string[] {
       out.push(`${pathStr}.${k}: only in upstream (${JSON.stringify(a[k])?.slice(0, 80)})`);
       continue;
     }
-    out.push(...diff(a[k], b[k], `${pathStr}.${k}`));
+    out.push(...diff(a[k], b[k], `${pathStr}.${k}`, k));
   }
   return out;
 }
