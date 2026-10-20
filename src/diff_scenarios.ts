@@ -674,6 +674,18 @@ function checkRoundTrip(): { label: string; problems: string[] } {
     }
   }
 
+  // A material must stay in the bucket it was loaded from. Re-bucketing a
+  // photo from `images` to `videos` would change the user's file.
+  for (const bucket of Object.keys(beforeBuckets)) {
+    const beforeIds = (beforeBuckets[bucket] ?? []).map((m: any) => m?.id);
+    const afterIds = (afterBuckets[bucket] ?? []).map((m: any) => m?.id);
+    for (const id of beforeIds) {
+      if (id && !afterIds.includes(id)) {
+        problems.push(`material ${id} moved out of the ${bucket} bucket`);
+      }
+    }
+  }
+
   // Every segment must survive, with the same references.
   const countSegs = (info: any) =>
     (info.tracks ?? []).reduce(

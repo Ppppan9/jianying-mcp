@@ -180,7 +180,7 @@ python3 scripts/compare_drafts.py \
 ```
 
 ```
-[1] verify.js            Result: 137 passed, 0 failed
+[1] verify.js            Result: 143 passed, 0 failed
 [2] diff_scenarios.js    Scenarios: 12 matched, 0 differed
 [3] compare_drafts.py    [A] Structural diff: 0 difference(s)
                          VERDICT: PASS
@@ -252,6 +252,15 @@ media bin — clips that are staged but not on the timeline. The reference
 implementation carries that material through, and so does this one now. The
 round-trip check was added to the harness at the same time, because the
 generate-and-compare check could never have caught it.
+
+A further pass found that saving was not atomic: the four files of a draft
+were written one after another, so a failure part-way through left a mix of
+old and new files. The save now stages every file and renames them into
+place together, keeping the previous version aside so it can be restored.
+Two more defects came out of probing the paths the earlier rounds had not
+touched: a photo in the `images` bucket was moved to `videos` on the way
+through, and adding a file that a loaded draft already held created a
+duplicate material for it.
 
 The full contract, including every rule now enforced, is in
 [`docs/DRAFT_FORMAT.md`](docs/DRAFT_FORMAT.md).

@@ -928,6 +928,12 @@ async function main() {
     (seededAfter.materials.videos ?? []).length,
   );
   check(
+    "loading and saving keeps a photo in the images bucket",
+    (seededAfter.materials.images ?? []).length === 1 &&
+      (seededAfter.materials.images ?? [])[0]?.type === "photo",
+    seededAfter.materials.images,
+  );
+  check(
     "loading and saving keeps the segment references",
     (seededAfter.tracks ?? []).reduce(
       (n: number, t: any) =>
@@ -983,6 +989,41 @@ async function main() {
   );
   await client.call("jianying_close_draft", { name: "Seeded" });
 
+  // Adding a file that a loaded draft already holds must reuse its material
+  // rather than creating a duplicate.
+  const reuseName = "Reuse";
+  await client.call("jianying_create_draft", {
+    name: reuseName, width: 1920, height: 1080, overwrite: true,
+  });
+  await client.call("jianying_add_video", {
+    name: reuseName, filePath: vid1, start: 0, duration: 4,
+  });
+  await client.call("jianying_save_draft", { name: reuseName });
+  await client.call("jianying_close_draft", { name: reuseName });
+  await client.call("jianying_open_draft", { name: reuseName });
+  await client.call("jianying_add_video", {
+    name: reuseName, filePath: vid1, start: 4, duration: 4,
+  });
+  await client.call("jianying_save_draft", { name: reuseName });
+  const reused = JSON.parse(
+    fs.readFileSync(path.join(DRAFTS_ROOT, reuseName, "draft_info.json"), "utf8"),
+  );
+  const reuseSegments = reused.tracks
+    .find((t: any) => t.type === "video")
+    ?.segments ?? [];
+  check(
+    "adding a file a loaded draft already holds does not duplicate the material",
+    (reused.materials.videos ?? []).length === 1,
+    (reused.materials.videos ?? []).length,
+  );
+  check(
+    "the reused material is shared by both segments",
+    reuseSegments.length === 2 &&
+      reuseSegments[0].material_id === reuseSegments[1].material_id,
+    reuseSegments.map((s: any) => s.material_id),
+  );
+  await client.call("jianying_close_draft", { name: reuseName });
+
   // The canvas size and frame rate must be validated. A numeric string is
   // accepted and normalised to a number, like the track index; anything else
   // is refused.
@@ -1027,6 +1068,47 @@ async function main() {
     !fs.existsSync(stray),
     stray,
   );
+
+  // A save must be atomic: if writing fails, the draft that was on disk must
+  // still be there, intact.
+  const atomicDir = path.join(DRAFTS_ROOT, "Atomic");
+  await client.call("jianying_create_draft", {
+    name: "Atomic", width: 1920, height: 1080, overwrite: true,
+  });
+  await client.call("jianying_add_video", {
+    name: "Atomic", filePath: vid1, start: 0, duration: 4,
+  });
+  await client.call("jianying_save_draft", { name: "Atomic" });
+  const atomicBefore = fs.readFileSync(
+    path.join(atomicDir, "draft_info.json"),
+    "utf8",
+  );
+  // Make saving fail: put a non-empty directory where one of the target
+  // files goes. A rename cannot replace a non-empty directory, so the save
+  // fails part-way through.
+  const blocked = path.join(atomicDir, "draft_settings");
+  fs.rmSync(blocked, { force: true, recursive: true });
+  fs.mkdirSync(path.join(blocked, "occupied"), { recursive: true });
+
+  let atomicErr: string | null = null;
+  try {
+    await client.call("jianying_save_draft", { name: "Atomic" });
+  } catch (e: any) {
+    atomicErr = e.message;
+  }
+  check("a failed save reports the failure", atomicErr !== null, atomicErr);
+  const atomicAfter = fs.readFileSync(
+    path.join(atomicDir, "draft_info.json"),
+    "utf8",
+  );
+  check(
+    "a failed save leaves the previous draft intact",
+    atomicBefore === atomicAfter,
+  );
+  const strays = fs
+    .readdirSync(atomicDir)
+    .filter((f) => f.includes(".tmp") || f.includes(".bak"));
+  check("a failed save leaves no temporary file behind", strays.length === 0, strays);
 
   client.close();
 

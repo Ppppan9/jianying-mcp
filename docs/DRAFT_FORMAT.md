@@ -508,6 +508,28 @@ removing an unrelated file.
 When no media matches, nothing is removed. A cleanup sweep at that point
 would delete the media bin.
 
+The same computation is what stops a duplicate: adding a file that a loaded
+draft already holds reuses its material instead of creating a second entry
+for the same file.
+
+### A material keeps the bucket it was loaded from
+
+A photo in the `images` bucket stays there. A fresh draft puts every video
+material in the `videos` bucket — which is what the reference implementation
+does, leaving its `images` bucket empty — but re-bucketing a loaded
+material would change the user's file.
+
+### Saving is atomic
+
+The save happens in two phases. Every file is written to a temporary name
+first; only when all of them are on disk are they renamed into place, with
+the previous version kept aside so a failure part-way through can be undone.
+
+That matters because the four files of a draft belong together. A failure
+that left `draft_info.json` updated while `draft_settings` was still the
+old version would leave a draft that is neither the previous one nor the
+new one.
+
 ---
 
 ## 7. Verification

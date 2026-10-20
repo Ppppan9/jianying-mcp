@@ -624,8 +624,9 @@ export class Draft {
             for (const material of materials[bucket] ?? []) {
                 if (!material || typeof material.id !== "string")
                     continue;
-                // A loaded material was not created here, so it is never swept.
-                this.addMaterial({ id: material.id, kind, data: material }, false);
+                // A loaded material was not created here, so it is never swept, and
+                // it keeps the bucket it was found in.
+                this.addMaterial({ id: material.id, kind, data: material, loadedBucket: bucket }, false);
                 // A media material that was staged in this draft is registered under
                 // its staged path, so it can be found again by the original file.
                 if (kind === "video" || kind === "photo" || kind === "audio") {
@@ -842,6 +843,22 @@ export class Draft {
         const md5 = createHash("md5").update(abs).digest("hex");
         const ext = path.extname(abs) || (kind === "audio" ? ".mp3" : ".mp4");
         const stagedName = `${md5}${ext}`;
+        // A loaded draft knows its media by the staged copy, whose name is the
+        // md5 of the source path. Looking that name up finds the material the
+        // draft already has, so adding the same file again reuses it instead of
+        // creating a duplicate.
+        const known = this.stagedByMaterialId.get(stagedName);
+        if (known) {
+            this.stagedMedia.set(cacheKey, {
+                materialId: known.materialId,
+                stagedName,
+            });
+            return {
+                materialId: known.materialId,
+                probe,
+                stagedPath: path.join(this.materialsDir, stagedName),
+            };
+        }
         const stagedPath = path.join(this.materialsDir, stagedName);
         fs.mkdirSync(this.materialsDir, { recursive: true });
         fs.copyFileSync(abs, stagedPath);
@@ -1473,18 +1490,24 @@ export class Draft {
             materials[bucket] = [...materials[bucket], ...items];
         }
         for (const entry of this.materialOrder) {
-            // A photo keeps the "photo" type inside the `videos` bucket, which is
-            // where the reference implementation puts every video material — its
-            // `images` bucket is always empty.
+            // A photo created here goes into the `videos` bucket, which is where
+            // the reference implementation puts every video material — its
+            // `images` bucket is always empty for a fresh draft. A photo that came
+            // from a loaded draft keeps the bucket it was in, because re-bucketing
+            // it would change the user's file.
             const bucket = entry.kind === "speed"
                 ? "speeds"
                 : entry.kind === "audio_fade"
                     ? "audio_fades"
-                    : entry.kind === "video" || entry.kind === "photo"
-                        ? "videos"
-                        : entry.kind === "audio"
-                            ? "audios"
-                            : "texts";
+                    : entry.kind === "photo"
+                        ? entry.loadedBucket === "images"
+                            ? "images"
+                            : "videos"
+                        : entry.kind === "video"
+                            ? "videos"
+                            : entry.kind === "audio"
+                                ? "audios"
+                                : "texts";
             materials[bucket].push(entry.data);
         }
         // A track with no segments carries no information — it can be left over
@@ -1635,22 +1658,104 @@ export class Draft {
     save() {
         const written = [];
         fs.mkdirSync(this.dir, { recursive: true });
-        const write = (name, content) => {
-            const p = path.join(this.dir, name);
-            fs.writeFileSync(p, content, "utf8");
-            written.push(p);
+        // The save is done in two phases. Every file is written to a temporary
+        // name first; only when all of them are on disk are they renamed into
+        // place. A failure therefore leaves the previous draft exactly as it
+        // was, rather than a mix of old and new files.
+        const pending = [];
+        const staged = (name, content) => {
+            const final = path.join(this.dir, name);
+            const tmp = path.join(this.dir, `.${name}.tmp-${process.pid}`);
+            fs.writeFileSync(tmp, content, "utf8");
+            pending.push({ tmp, final });
         };
-        write("draft_info.json", JSON.stringify(this.buildDraftInfo(), null, 4));
-        write("draft_meta_info.json", JSON.stringify(buildMetaInfo(this.name), null, 4));
-        write("draft_settings", [
-            "[General]",
-            "draft_create_time=0",
-            "draft_last_edit_time=0",
-            "real_edit_keys=1",
-            "real_edit_seconds=0",
-            "",
-        ].join("\n"));
-        write("key_value.json", "{}");
+        try {
+            staged("draft_info.json", JSON.stringify(this.buildDraftInfo(), null, 4));
+            staged("draft_meta_info.json", JSON.stringify(buildMetaInfo(this.name), null, 4));
+            staged("draft_settings", [
+                "[General]",
+                "draft_create_time=0",
+                "draft_last_edit_time=0",
+                "real_edit_keys=1",
+                "real_edit_seconds=0",
+                "",
+            ].join("\n"));
+            staged("key_value.json", "{}");
+        }
+        catch (error) {
+            for (const { tmp } of pending) {
+                try {
+                    fs.rmSync(tmp, { force: true });
+                }
+                catch {
+                    /* the temporary file may already be gone */
+                }
+            }
+            throw error;
+        }
+        // All files are written. Move them into place. A rename replaces the
+        // target atomically, so a file is never seen half-written; and the
+        // previous version is kept aside so a failure part-way through can be
+        // undone.
+        //
+        // The backup is a *copy*, not a move: moving the target aside would
+        // make an occupied target (a directory, say) look free, and the save
+        // would silently succeed where it should have failed.
+        const backups = [];
+        try {
+            for (const { tmp, final } of pending) {
+                const backup = fs.existsSync(final)
+                    ? path.join(this.dir, `.${path.basename(final)}.bak-${process.pid}`)
+                    : null;
+                if (backup) {
+                    try {
+                        fs.copyFileSync(final, backup);
+                    }
+                    catch {
+                        // The target may be a directory, which cannot be copied. The
+                        // rename below will fail on it, which is the correct outcome.
+                    }
+                }
+                backups.push({ final, backup });
+                fs.renameSync(tmp, final);
+                written.push(final);
+            }
+        }
+        catch (error) {
+            // Put the draft back the way it was.
+            for (const { final, backup } of backups.reverse()) {
+                try {
+                    if (backup && fs.existsSync(backup)) {
+                        fs.rmSync(final, { force: true, recursive: true });
+                        fs.renameSync(backup, final);
+                    }
+                }
+                catch {
+                    /* best effort */
+                }
+            }
+            for (const { tmp } of pending) {
+                try {
+                    fs.rmSync(tmp, { force: true, recursive: true });
+                }
+                catch {
+                    /* the temporary file may already be gone */
+                }
+            }
+            throw error;
+        }
+        for (const { backup } of backups) {
+            if (backup) {
+                try {
+                    // A backup can be a directory when the target path was one, so the
+                    // removal has to be recursive.
+                    fs.rmSync(backup, { force: true, recursive: true });
+                }
+                catch {
+                    /* best effort */
+                }
+            }
+        }
         // Touch the directory so JianYing's project list sorts the newest first.
         const now = new Date();
         fs.utimesSync(this.dir, now, now);

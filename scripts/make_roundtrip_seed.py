@@ -139,7 +139,24 @@ def build() -> dict:
             # Buckets this engine does model.
             "audio_fades": [],
             "audios": [],
-            "images": [],
+            # A photo in the `images` bucket. A loaded draft must keep it
+            # there — re-bucketing it would change the user's file.
+            "images": [
+                {
+                    "category_id": "",
+                    "category_name": "local",
+                    "check_flag": 63487,
+                    "duration": 10800000000,
+                    "height": 600,
+                    "id": "image-seed-0001",
+                    "local_material_id": "image-seed",
+                    "material_id": "image-seed-0001",
+                    "material_name": "image_seed.png",
+                    "path": "/tmp/jy-roundtrip/Seeded/materials/image_seed.png",
+                    "type": "photo",
+                    "width": 800,
+                }
+            ],
             "speeds": [],
             "texts": [],
             "videos": [
