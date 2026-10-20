@@ -180,7 +180,7 @@ python3 scripts/compare_drafts.py \
 ```
 
 ```
-[1] verify.js            Result: 105 passed, 0 failed
+[1] verify.js            Result: 107 passed, 0 failed
 [2] diff_scenarios.js    Scenarios: 12 matched, 0 differed
 [3] compare_drafts.py    [A] Structural diff: 0 difference(s)
                          VERDICT: PASS
@@ -216,7 +216,12 @@ that report an unknown frame count as `"N/A"`. A fifth review closed the last
 residuals: a still image was classified as a `video` material instead of a
 `photo`, an animated image's real length was overwritten by the fallback, an
 audio file with an unreadable duration was refused instead of falling back,
-and a subtitle conflict reported the wrong track.
+and a subtitle conflict reported the wrong track. A sixth review caught a
+regression in the fifth round — a still image that ffprobe could not read
+was written as a `video` material — and exposed a deployment problem: a
+GUI-launched app inherits a minimal PATH, so ffprobe, installed by Homebrew
+under `/opt/homebrew/bin`, was not on it. The prober now searches the usual
+install locations itself.
 
 The full contract, including every rule now enforced, is in
 [`docs/DRAFT_FORMAT.md`](docs/DRAFT_FORMAT.md).
@@ -335,7 +340,7 @@ redistributed here.
 
 ### 验证过程
 
-实现经过三轮审查。第一轮逐字段比对发现 **62 处**差异；对着底层库做差分复审又挖出 **8 处**之前没覆盖到的（`speeds` 材质缺失、按轨道类型的段字段写错、`render_index` 不对、两个素材桶名拼错、变速语义写反、把 `attribute` 当成轨道编号）。第二轮对抗式审查再发现 **21 项**问题，其中实质性的是：`create_draft` 在拒绝打开前先删掉已有草稿、媒体缓存让视频轨引用到音频素材、`ms` 被解析成分钟、名字净化不幂等导致草稿无法被寻址、封面图被误判成视频轨、以及 `export_srt` 会覆写它被指向的任意文件。第三轮复审这些修复，又抓出一处第二轮**引入**的回归：音轨比画面短的视频，素材时长被截成了音轨长度；同时 JPEG 静帧仍不可用、畸形轨道号会把 `render_index: null` 写进草稿。第四轮复审确认这批修复，并清掉最后几处残留：解码器报"未知时长"时仍会把 `null` 写进草稿、没给时长的静帧会变成 40 毫秒一闪而过、静帧判定在把未知帧数报成 `"N/A"` 的 ffprobe 上会失效。
+实现经过六轮审查。第一轮逐字段比对发现 **62 处**差异；对着底层库做差分复审又挖出 **8 处**之前没覆盖到的（`speeds` 材质缺失、按轨道类型的段字段写错、`render_index` 不对、两个素材桶名拼错、变速语义写反、把 `attribute` 当成轨道编号）。第二轮对抗式审查再发现 **21 项**问题，其中实质性的是：`create_draft` 在拒绝打开前先删掉已有草稿、媒体缓存让视频轨引用到音频素材、`ms` 被解析成分钟、名字净化不幂等导致草稿无法被寻址、封面图被误判成视频轨、以及 `export_srt` 会覆写它被指向的任意文件。第三轮复审这些修复，又抓出一处第二轮**引入**的回归：音轨比画面短的视频，素材时长被截成了音轨长度；同时 JPEG 静帧仍不可用、畸形轨道号会把 `render_index: null` 写进草稿。第四轮复审确认这批修复，并清掉最后几处残留：解码器报"未知时长"时仍会把 `null` 写进草稿、没给时长的静帧会变成 40 毫秒一闪而过、静帧判定在把未知帧数报成 `"N/A"` 的 ffprobe 上会失效。
 
 完整契约见 [`docs/DRAFT_FORMAT.md`](docs/DRAFT_FORMAT.md)。
 

@@ -375,12 +375,12 @@ function fingerprint(draftDir: string): any {
         delete c.music_id;
         // The reference implementation classifies a still image as "photo"
         // only when MediaInfo is available; with its ffprobe fallback it
-        // reports "video". Both are produced by the reference depending on
-        // the environment, so the classification of an image is normalised
-        // away and compared separately.
+        // reports "video". The environment-dependent case is normalised away
+        // so the comparison stays meaningful on a machine without MediaInfo;
+        // the MediaInfo behaviour is checked separately.
         const stagedName = String(m.material_name ?? m.name ?? "");
         const ext = stagedName.slice(stagedName.lastIndexOf(".")).toLowerCase();
-        if (IMAGE_EXTENSIONS.has(ext)) {
+        if (IMAGE_EXTENSIONS.has(ext) && process.env.JY_UPSTREAM_HAS_MEDIAINFO !== "1") {
           c.type = "<image>";
           c.duration = "<image-duration>";
         }

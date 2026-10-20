@@ -73,3 +73,12 @@ jobs:
 
       - name: Differential scenarios against the reference library
         run: node dist/diff_scenarios.js "$JY_UPSTREAM_SKILL" ./test-media ./diff_scenarios
+
+      # The reference classifies a still image as "photo" only when MediaInfo
+      # is importable. With MediaInfo present the image classification and
+      # duration are compared for real, without the normalisation the
+      # fallback environment needs.
+      - name: Differential scenarios with MediaInfo (strict image comparison)
+        run: |
+          JY_UPSTREAM_HAS_MEDIAINFO=1 \
+          node dist/diff_scenarios.js "$JY_UPSTREAM_SKILL" ./test-media ./diff_scenarios_mediainfo

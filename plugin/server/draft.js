@@ -241,6 +241,8 @@ export async function probeMedia(filePath) {
             height: 1080,
             kind: "video",
             stillImage: true,
+            materialType: "photo",
+            materialDuration: STILL_IMAGE_MATERIAL_DURATION_US,
         };
     }
     if (!(await hasFfprobe())) {
@@ -250,23 +252,48 @@ export async function probeMedia(filePath) {
     throw new Error(`Cannot probe "${abs}": ffprobe could not read this file. ` +
         `It may be corrupt or in an unsupported format.`);
 }
+/**
+ * Locates the ffprobe executable.
+ *
+ * A GUI-launched application inherits a minimal PATH — on macOS that is
+ * `/usr/bin:/bin:/usr/sbin:/sbin`, which does not contain `/opt/homebrew/bin`
+ * where Homebrew installs ffmpeg. Relying on PATH alone would make every
+ * probe fail in the Plugin path, so the usual install locations are checked
+ * explicitly.
+ */
+let ffprobePath;
+async function resolveFfprobe() {
+    if (ffprobePath !== undefined)
+        return ffprobePath;
+    const candidates = ["ffprobe"];
+    const home = process.env.HOME || process.env.USERPROFILE || "";
+    if (home) {
+        candidates.push(path.join(home, ".local", "bin", "ffprobe"), path.join(home, "bin", "ffprobe"), path.join(home, ".ffmpeg", "bin", "ffprobe"), path.join(home, "Applications", "ffmpeg", "bin", "ffprobe"));
+    }
+    candidates.push("/opt/homebrew/bin/ffprobe", "/usr/local/bin/ffprobe", "/usr/bin/ffprobe", "/bin/ffprobe", "/opt/local/bin/ffprobe", "/snap/bin/ffprobe");
+    for (const candidate of candidates) {
+        try {
+            await execFileAsync(candidate, ["-version"], { timeout: 5_000 });
+            ffprobePath = candidate;
+            return ffprobePath;
+        }
+        catch {
+            /* try the next candidate */
+        }
+    }
+    ffprobePath = null;
+    return ffprobePath;
+}
 /** Reports whether ffprobe can be executed at all. */
-let ffprobeAvailable = null;
 async function hasFfprobe() {
-    if (ffprobeAvailable !== null)
-        return ffprobeAvailable;
-    try {
-        await execFileAsync("ffprobe", ["-version"], { timeout: 5_000 });
-        ffprobeAvailable = true;
-    }
-    catch {
-        ffprobeAvailable = false;
-    }
-    return ffprobeAvailable;
+    return (await resolveFfprobe()) !== null;
 }
 async function tryFfprobe(abs) {
+    const binary = await resolveFfprobe();
+    if (!binary)
+        return null;
     try {
-        const { stdout } = await execFileAsync("ffprobe", [
+        const { stdout } = await execFileAsync(binary, [
             "-v", "error",
             "-print_format", "json",
             "-show_format",
@@ -742,6 +769,10 @@ export class Draft {
         let sourceUs;
         let targetUs;
         let effectiveSpeed;
+        // The usable length of the material. A still image's material is 3 hours
+        // long, so it can be placed for any length; a video is bounded by its
+        // own duration.
+        const materialLengthUs = probe.materialDuration ?? probe.duration;
         if (requestedTargetUs > 0) {
             targetUs = requestedTargetUs;
             effectiveSpeed = requestedSpeed;
@@ -749,12 +780,12 @@ export class Draft {
         }
         else {
             // No explicit length: consume the rest of the material from the offset.
-            sourceUs = Math.max(0, probe.duration - sourceStartUs);
+            sourceUs = Math.max(0, materialLengthUs - sourceStartUs);
             effectiveSpeed = requestedSpeed;
             targetUs = Math.round(sourceUs / effectiveSpeed);
         }
-        if (sourceStartUs + sourceUs > probe.duration + 1000 && !probe.stillImage) {
-            throw new Error(`Requested range ${sourceStartUs / US}s..${(sourceStartUs + sourceUs) / US}s exceeds media duration ${probe.duration / US}s`);
+        if (sourceStartUs + sourceUs > materialLengthUs + 1000) {
+            throw new Error(`Requested range ${sourceStartUs / US}s..${(sourceStartUs + sourceUs) / US}s exceeds media duration ${materialLengthUs / US}s`);
         }
         const targetRange = { start: startUs, duration: targetUs };
         this.assertNoOverlap(track, targetRange, "video clip");

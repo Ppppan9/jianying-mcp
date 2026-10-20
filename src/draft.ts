@@ -356,6 +356,8 @@ export async function probeMedia(filePath: string): Promise<MediaProbe> {
       height: 1080,
       kind: "video",
       stillImage: true,
+      materialType: "photo",
+      materialDuration: STILL_IMAGE_MATERIAL_DURATION_US,
     };
   }
 
@@ -371,24 +373,63 @@ export async function probeMedia(filePath: string): Promise<MediaProbe> {
   );
 }
 
-/** Reports whether ffprobe can be executed at all. */
-let ffprobeAvailable: boolean | null = null;
+/**
+ * Locates the ffprobe executable.
+ *
+ * A GUI-launched application inherits a minimal PATH — on macOS that is
+ * `/usr/bin:/bin:/usr/sbin:/sbin`, which does not contain `/opt/homebrew/bin`
+ * where Homebrew installs ffmpeg. Relying on PATH alone would make every
+ * probe fail in the Plugin path, so the usual install locations are checked
+ * explicitly.
+ */
+let ffprobePath: string | null | undefined;
 
-async function hasFfprobe(): Promise<boolean> {
-  if (ffprobeAvailable !== null) return ffprobeAvailable;
-  try {
-    await execFileAsync("ffprobe", ["-version"], { timeout: 5_000 });
-    ffprobeAvailable = true;
-  } catch {
-    ffprobeAvailable = false;
+async function resolveFfprobe(): Promise<string | null> {
+  if (ffprobePath !== undefined) return ffprobePath;
+
+  const candidates: string[] = ["ffprobe"];
+  const home = process.env.HOME || process.env.USERPROFILE || "";
+  if (home) {
+    candidates.push(
+      path.join(home, ".local", "bin", "ffprobe"),
+      path.join(home, "bin", "ffprobe"),
+      path.join(home, ".ffmpeg", "bin", "ffprobe"),
+      path.join(home, "Applications", "ffmpeg", "bin", "ffprobe"),
+    );
   }
-  return ffprobeAvailable;
+  candidates.push(
+    "/opt/homebrew/bin/ffprobe",
+    "/usr/local/bin/ffprobe",
+    "/usr/bin/ffprobe",
+    "/bin/ffprobe",
+    "/opt/local/bin/ffprobe",
+    "/snap/bin/ffprobe",
+  );
+
+  for (const candidate of candidates) {
+    try {
+      await execFileAsync(candidate, ["-version"], { timeout: 5_000 });
+      ffprobePath = candidate;
+      return ffprobePath;
+    } catch {
+      /* try the next candidate */
+    }
+  }
+  ffprobePath = null;
+  return ffprobePath;
+}
+
+/** Reports whether ffprobe can be executed at all. */
+async function hasFfprobe(): Promise<boolean> {
+  return (await resolveFfprobe()) !== null;
 }
 
 async function tryFfprobe(abs: string): Promise<MediaProbe | null> {
+  const binary = await resolveFfprobe();
+  if (!binary) return null;
   try {
     const { stdout } = await execFileAsync(
-      "ffprobe",
+      binary,
       [
         "-v", "error",
         "-print_format", "json",
@@ -987,20 +1028,25 @@ export class Draft {
     let targetUs: number;
     let effectiveSpeed: number;
 
+    // The usable length of the material. A still image's material is 3 hours
+    // long, so it can be placed for any length; a video is bounded by its
+    // own duration.
+    const materialLengthUs = probe.materialDuration ?? probe.duration;
+
     if (requestedTargetUs > 0) {
       targetUs = requestedTargetUs;
       effectiveSpeed = requestedSpeed;
       sourceUs = Math.round(targetUs * effectiveSpeed);
     } else {
       // No explicit length: consume the rest of the material from the offset.
-      sourceUs = Math.max(0, probe.duration - sourceStartUs);
+      sourceUs = Math.max(0, materialLengthUs - sourceStartUs);
       effectiveSpeed = requestedSpeed;
       targetUs = Math.round(sourceUs / effectiveSpeed);
     }
 
-    if (sourceStartUs + sourceUs > probe.duration + 1000 && !probe.stillImage) {
+    if (sourceStartUs + sourceUs > materialLengthUs + 1000) {
       throw new Error(
-        `Requested range ${sourceStartUs / US}s..${(sourceStartUs + sourceUs) / US}s exceeds media duration ${probe.duration / US}s`,
+        `Requested range ${sourceStartUs / US}s..${(sourceStartUs + sourceUs) / US}s exceeds media duration ${materialLengthUs / US}s`,
       );
     }
 

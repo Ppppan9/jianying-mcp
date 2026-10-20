@@ -516,8 +516,8 @@ async function main() {
     { before: beforeFiles, after: afterFiles },
   );
 
-  // A still image must be placeable for longer than its probe duration, and
-  // the segment's source range must still fit inside the material.
+  // A still image's source range must stay inside its material, and a clip
+  // longer than the material must be refused.
   const photo = path.join(MEDIA_DIR, "photo.png");
   const photoJpg = path.join(MEDIA_DIR, "photo.jpg");
   const stillCases: Array<[string, string, number]> = [
@@ -575,6 +575,43 @@ async function main() {
       `the ${label} still image keeps a long material duration`,
       (photoMat?.duration ?? 0) >= 3_600_000_000,
       photoMat?.duration,
+    );
+  }
+
+  // A still image's material is 3 hours long, so a clip inside that is fine
+  // but one beyond it must be refused — and a source offset past the probe
+  // fallback must not silently produce a zero-length clip.
+  if (fs.existsSync(photo)) {
+    let tooLong: string | null = null;
+    try {
+      await client.call("jianying_add_video", {
+        name: "Draft: v2", filePath: photo, start: 0, duration: 4 * 3600, track: 11,
+      });
+    } catch (e: any) {
+      tooLong = e.message;
+    }
+    check(
+      "a still image clip longer than its material is refused",
+      tooLong !== null && /exceeds media duration/.test(tooLong),
+      tooLong,
+    );
+
+    // A still image has no intrinsic length, so an offset inside its 3 hour
+    // material is legitimate. What must not happen is a silent zero-length
+    // clip.
+    let offsetSeg: any = null;
+    try {
+      const res = await client.call("jianying_add_video", {
+        name: "Draft: v2", filePath: photo, start: 0, sourceStart: 15, track: 12,
+      });
+      offsetSeg = res.segment;
+    } catch (e: any) {
+      offsetSeg = null;
+    }
+    check(
+      "a still image with a source offset does not produce a zero-length clip",
+      offsetSeg !== null && (offsetSeg.durationSeconds ?? 0) > 0,
+      offsetSeg,
     );
   }
 

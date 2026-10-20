@@ -453,6 +453,16 @@ compared exactly.
 This project uses ffprobe because it is deterministic across platforms and
 ships with ffmpeg, which the reference implementation also expects.
 
+### ffprobe is located explicitly, not through PATH
+
+A GUI-launched application inherits a minimal PATH — on macOS that is
+`/usr/bin:/bin:/usr/sbin:/sbin`, which does not contain `/opt/homebrew/bin`
+where Homebrew installs ffmpeg. Relying on PATH alone would make every
+probe fail in that environment. The prober therefore searches the usual
+install locations itself: `$HOME/.local/bin`, `$HOME/bin`,
+`$HOME/.ffmpeg/bin`, `/opt/homebrew/bin`, `/usr/local/bin`, `/usr/bin`,
+`/bin`, `/opt/local/bin` and `/snap/bin`.
+
 ---
 
 ## 6. Verification
