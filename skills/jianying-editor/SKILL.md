@@ -147,6 +147,7 @@ jianying_close_draft    name=...
 | 重复打开同名草稿 | `already open`（防止丢未保存的改动） |
 | 建同名草稿时磁盘上已有 | `already exists`（要覆盖得显式传 `overwrite=true`） |
 | 覆盖不是草稿的目录 | `does not look like a JianYing draft` |
+| `draft_info.json` 不是草稿（数组 / null / 没有 tracks） | `not a JianYing draft` / `has no tracks array`（**文件不会被改动**） |
 | 草稿名是 `..` / `.` / Windows 设备名 | `Invalid draft name` |
 | SRT 导出到已存在的文件 | `Refusing to overwrite`（要覆盖得显式传 `overwrite=true`） |
 | SRT 导出到非 `.srt` 路径 | `must end in .srt` |

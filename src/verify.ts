@@ -113,6 +113,41 @@ async function main() {
     duplicateCreate,
   );
 
+  // A draft_info.json that parses but is not a draft must be refused, and
+  // the file must be left exactly as it was. Reading it as an empty draft
+  // and saving would overwrite the user's file with nothing.
+  //
+  // Two shapes are checked because they fail in different places: "null"
+  // is not an object at all, and "{}" is an object with no tracks in it.
+  for (const [label, hostileContent] of [
+    ["a JSON null", "null"],
+    ["an object without tracks", "{}"],
+  ] as const) {
+    const hostileName = `Hostile_Draft`;
+    const hostileDir = path.join(DRAFTS_ROOT, hostileName);
+    fs.rmSync(hostileDir, { recursive: true, force: true });
+    fs.mkdirSync(hostileDir, { recursive: true });
+    const infoPath = path.join(hostileDir, "draft_info.json");
+    fs.writeFileSync(infoPath, hostileContent, "utf8");
+
+    let refusal: string | null = null;
+    try {
+      await client.call("jianying_open_draft", { name: hostileName });
+    } catch (e: any) {
+      refusal = e.message;
+    }
+    check(
+      `draft_info.json holding ${label} is refused`,
+      refusal !== null && /not a JianYing draft|not hold a JianYing draft/.test(refusal),
+      refusal,
+    );
+    check(
+      `a refused draft (${label}) is left untouched`,
+      fs.readFileSync(infoPath, "utf8") === hostileContent,
+    );
+    fs.rmSync(hostileDir, { recursive: true, force: true });
+  }
+
   if (HAS_MEDIA) {
     const probed = await client.call("jianying_probe_media", { filePath: vid1 });
     check("probe_media reports video", probed.kind === "video", probed);

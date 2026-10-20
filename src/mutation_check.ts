@@ -184,6 +184,20 @@ const MUTATIONS: Array<{ name: string; from: string; to: string; file?: string }
     to: "      subtitle: S.number(",
     file: "server.ts",
   },
+  {
+    // A draft_info.json holding an array used to be read as an empty draft.
+    // Saving it would have overwritten the user's file with nothing.
+    name: "a draft_info.json that is not a draft is accepted",
+    from: "    if (info === null || typeof info !== \"object\" || Array.isArray(info)) {",
+    to: "    if (false) {",
+    file: "draft.ts",
+  },
+  {
+    name: "a draft without a tracks array is accepted",
+    from: "    if (!Array.isArray(info.tracks)) {",
+    to: "    if (false) {",
+    file: "draft.ts",
+  },
 ];
 
 function run(cmd: string, args: string[], env: NodeJS.ProcessEnv = {}): boolean {

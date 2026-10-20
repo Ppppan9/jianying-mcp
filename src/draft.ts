@@ -859,6 +859,26 @@ export class Draft {
       );
     }
 
+    // The file has to be a draft, not merely something that parses.
+    //
+    // A draft_info.json holding an array, a string or null used to be read
+    // as an empty draft: every property read returned undefined and the
+    // loader carried on. Saving that draft would then overwrite the user's
+    // file with an empty one — the original content gone, with no error
+    // anywhere. Refuse before anything is read from it.
+    if (info === null || typeof info !== "object" || Array.isArray(info)) {
+      throw new Error(
+        `Cannot open "${this.name}": ${this.dir}/draft_info.json does not hold a JianYing draft ` +
+          `(it must be an object with a tracks array, not ${describeJsonValue(info)}).`,
+      );
+    }
+    if (!Array.isArray(info.tracks)) {
+      throw new Error(
+        `Cannot open "${this.name}": ${this.dir}/draft_info.json has no tracks array, ` +
+          `so it is not a JianYing draft.`,
+      );
+    }
+
     this.fps = typeof info.fps === "number" ? info.fps : this.fps;
     if (info.canvas_config) {
       this.canvasWidth = Number(info.canvas_config.width) || this.canvasWidth;
@@ -2340,6 +2360,15 @@ function normalizeStyle(
       width: strokeWidth,
     },
   };
+}
+
+/**
+ * Names a JSON value for an error message.
+ */
+function describeJsonValue(value: unknown): string {
+  if (value === null) return "null";
+  if (Array.isArray(value)) return "an array";
+  return `a ${typeof value}`;
 }
 
 /**

@@ -566,7 +566,7 @@ new one.
 
 ## 7. Verification
 
-The implementation in `src/draft.ts` is validated in eight layers.
+The implementation in `src/draft.ts` is validated in nine layers.
 
 ### Layer 1 — end-to-end functional suite
 
@@ -678,6 +678,24 @@ The check has to reach the engine's own validation, so it opens a draft
 first and points the placeholder paths at real media. Without that, every
 call stops at "no open draft" and a wrong value in the documentation is
 never noticed.
+
+### Layer 9 — loader check
+
+```bash
+node dist/loader_check.js
+```
+
+Feeds the loader a draft_info.json that is not a draft: an array, a
+string, a number, null, an object with no tracks, a segment with no
+timerange, a material with no id, a very deep structure, a byte order
+mark. The loader has to refuse them with a clear message and leave the
+file exactly as it found it.
+
+Two of those shapes were being read as an empty draft. A draft_info.json
+holding an array parsed fine, every property read returned undefined, and
+the loader carried on — so saving it would have overwritten the user's
+file with an empty one. A null threw a TypeError about reading "fps".
+Both are refused now, before anything is read from the file.
 
 ---
 
