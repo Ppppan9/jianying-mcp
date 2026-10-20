@@ -376,21 +376,47 @@ JianYing mis-renders. This project closes them:
 
 ## 5. Media classification
 
-A still image exposes a video stream but reports no duration. The reference
-implementation falls back to **10 seconds** and keeps the material classified
-as `video`, so PNG and other images land in the `videos` bucket, not `images`.
+### A still image is a `photo` material with a 3 hour duration
 
-An image with no decodable stream at all is treated as a `photo` with a
-3-hour duration.
+An image exposes a video stream, but it is not a video. In the draft it is
+written as:
 
-### A still image may be placed for any length
+```json
+{ "type": "photo", "duration": 10800000000, ... }
+```
 
-A still image has no intrinsic length, so it can sit on the timeline for as
-long as the edit needs. The segment's `source_timerange` must still fit
-inside the material's `duration`, so the material is given a **3 hour**
-duration while the probe reports the 10 second fallback. Without this, a
-60-second still image would produce a segment whose source range overruns its
-own material.
+— the `photo` type inside the **`videos`** bucket (the `images` bucket stays
+empty, exactly as in the reference implementation), with a 3 hour duration so
+a clip of any length fits inside the material.
+
+The 10 second figure that appears elsewhere is the *clip* default — the
+length a still gets on the timeline when no duration is requested — not the
+material duration.
+
+### A still image is recognised by its extension, not its duration
+
+Decoders disagree about a still image's duration: some report nothing, some
+report one frame's worth (0.04s at 25fps), some report a container duration.
+Relying on the duration meant JPEG — the most common still format, and the
+one phone cameras and web assets produce — was treated as a 40-millisecond
+video and could not be placed on the timeline at all.
+
+The file extension plus a frame count of at most one is the reliable signal.
+A duration that matches a single frame at the stream's frame rate is
+recognised as "one frame" and replaced with the 10 second clip default; a
+still that reports a real length (an animated image) keeps it.
+
+### The reference implementation classifies images differently per environment
+
+With MediaInfo available, the reference classifies an image as `photo` with
+a 3 hour duration. Without it — its ffprobe fallback — the image is
+reported as `video` with a 10 second duration. Both are produced by the
+reference depending on the machine, so the differential comparison
+normalises the image classification away and compares it separately.
+
+This project always uses ffprobe and always reports `photo`, because a
+still image typed as `video` is a semantic error: JianYing may play it back
+as a video stream instead of holding it still.
 
 ### Cover art is not a video track
 
@@ -411,30 +437,16 @@ out of range.
 
 The audio duration is only the fallback when the file has no video stream.
 
-### A still image is recognised by its extension, not its duration
-
-Decoders disagree about a still image's duration: some report nothing, some
-report one frame's worth (0.04s at 25fps), some report a container duration.
-Relying on the duration meant JPEG — the most common still format, and the
-one phone cameras and web assets produce — was treated as a 40-millisecond
-video and could not be placed on the timeline at all.
-
-The file extension plus a frame count of at most one is the reliable signal.
-The material then carries the 3 hour duration the reference uses, so a clip
-of any length still fits inside it.
-
 ### Prober differences are not format differences
 
-Two things depend on the media prober rather than on the draft format, and
-they differ between platforms:
+One difference depends on the media prober rather than on the draft format:
 
 | | ffprobe (this project) | MediaInfo (reference) |
 |---|---|---|
-| Still image | video stream, 10 s fallback | image track on Linux (3 h), video track on macOS (10 s) |
 | mp3 duration | container duration (5.000 s) | decoded sample count (5.042 s) |
 
 Neither changes how JianYing renders the draft, so the differential
-comparison normalises both away. Everything else — the bucket set, the
+comparison normalises it away. Everything else — the bucket set, the
 material schema, the track layout and the segment serialization — is
 compared exactly.
 

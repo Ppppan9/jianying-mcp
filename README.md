@@ -180,7 +180,7 @@ python3 scripts/compare_drafts.py \
 ```
 
 ```
-[1] verify.js            Result: 101 passed, 0 failed
+[1] verify.js            Result: 105 passed, 0 failed
 [2] diff_scenarios.js    Scenarios: 12 matched, 0 differed
 [3] compare_drafts.py    [A] Structural diff: 0 difference(s)
                          VERDICT: PASS
@@ -212,7 +212,11 @@ into the draft. A fourth review confirmed those fixes and closed the last
 residuals: a decoder reporting an unknown duration could still write
 `null` into a draft, a still image without an explicit duration became a
 40 millisecond blip, and the still-image heuristic broke on ffprobe builds
-that report an unknown frame count as `"N/A"`.
+that report an unknown frame count as `"N/A"`. A fifth review closed the last
+residuals: a still image was classified as a `video` material instead of a
+`photo`, an animated image's real length was overwritten by the fallback, an
+audio file with an unreadable duration was refused instead of falling back,
+and a subtitle conflict reported the wrong track.
 
 The full contract, including every rule now enforced, is in
 [`docs/DRAFT_FORMAT.md`](docs/DRAFT_FORMAT.md).

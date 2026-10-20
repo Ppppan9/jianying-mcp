@@ -362,9 +362,7 @@ function fingerprint(draftDir: string): any {
   const materials: any = {};
   for (const [bucket, items] of Object.entries(info.materials ?? {})) {
     if (!Array.isArray(items) || items.length === 0) continue;
-    // Images live in the `videos` or the `images` bucket depending on how the
-    // media was classified. Both are valid, so they are compared as one.
-    const targetBucket = bucket === "images" ? "videos" : bucket;
+    const targetBucket = bucket;
     if (!materials[targetBucket]) materials[targetBucket] = [];
     materials[targetBucket].push(
       ...items.map((m: any) => {
@@ -375,11 +373,11 @@ function fingerprint(draftDir: string): any {
         delete c.name;
         delete c.path;
         delete c.music_id;
-        // A still image is classified differently by different probers: the
-        // reference implementation uses MediaInfo, which reports an image
-        // track on Linux and a video track on macOS. ffprobe always reports a
-        // video stream. The classification is a probing detail, not part of
-        // the draft format, so it is normalised away.
+        // The reference implementation classifies a still image as "photo"
+        // only when MediaInfo is available; with its ffprobe fallback it
+        // reports "video". Both are produced by the reference depending on
+        // the environment, so the classification of an image is normalised
+        // away and compared separately.
         const stagedName = String(m.material_name ?? m.name ?? "");
         const ext = stagedName.slice(stagedName.lastIndexOf(".")).toLowerCase();
         if (IMAGE_EXTENSIONS.has(ext)) {

@@ -566,6 +566,16 @@ async function main() {
         photoSeg.source_timerange.duration <= photoMat.duration,
       { material: photoMat?.duration, source: photoSeg?.source_timerange?.duration },
     );
+    check(
+      `the ${label} still image is typed as a photo`,
+      photoMat?.type === "photo",
+      photoMat?.type,
+    );
+    check(
+      `the ${label} still image keeps a long material duration`,
+      (photoMat?.duration ?? 0) >= 3_600_000_000,
+      photoMat?.duration,
+    );
   }
 
   // A video whose audio track is shorter than its picture must report the

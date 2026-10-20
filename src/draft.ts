@@ -82,6 +82,10 @@ export interface MediaProbe {
    * length, so it can be placed on the timeline for any duration.
    */
   stillImage?: boolean;
+  /** Material type written into the draft: "video" or "photo". */
+  materialType?: "video" | "photo";
+  /** Duration written into the material, which differs from the probe value. */
+  materialDuration?: number;
 }
 
 export interface Segment {
@@ -314,6 +318,19 @@ const STILL_IMAGE_DEFAULT_DURATION_US = 10_000_000;
 const STILL_IMAGE_MATERIAL_DURATION_US = 10_800_000_000;
 
 /**
+ * Parses an ffprobe frame rate such as "25/1" or "30000/1001".
+ * Returns 0 when the value cannot be parsed.
+ */
+function parseFrameRate(value: unknown): number {
+  if (typeof value !== "string" || !value) return 0;
+  const [num, den] = value.split("/");
+  const n = Number(num);
+  const d = den === undefined ? 1 : Number(den);
+  if (!Number.isFinite(n) || !Number.isFinite(d) || d === 0) return 0;
+  return n / d;
+}
+
+/**
  * Probes a media file for duration and dimensions.
  * Uses ffprobe when available (no native dependency), and falls back to the
  * file extension for still images.
@@ -430,17 +447,33 @@ async function tryFfprobe(abs: string): Promise<MediaProbe | null> {
           ? Number(video.nb_frames)
           : NaN;
       const frameCount = Number.isFinite(parsedFrames) ? parsedFrames : undefined;
-      const isStill =
-        isImageExtension && (frameCount === undefined || frameCount <= 1);
 
-      // A still image has no intrinsic length. The duration reported for it
-      // is one frame's worth, which would make the clip a 40 millisecond
-      // blip, so it is replaced by the reference's fallback.
-      const duration = isStill
-        ? STILL_IMAGE_DEFAULT_DURATION_US
-        : durationUs > 0
-          ? durationUs
-          : STILL_IMAGE_DEFAULT_DURATION_US;
+      // The length of one frame at the stream's frame rate. A duration
+      // close to this means the decoder reported a single frame rather than
+      // the clip's real length.
+      const fps = parseFrameRate(video.r_frame_rate ?? video.avg_frame_rate);
+      const singleFrameUs = fps > 0 ? Math.round(1_000_000 / fps) : 0;
+      const looksLikeOneFrame =
+        singleFrameUs > 0 &&
+        durationUs > 0 &&
+        durationUs <= singleFrameUs * 2;
+
+      const isStill =
+        isImageExtension &&
+        (frameCount === undefined
+          ? durationUs <= 0 || looksLikeOneFrame
+          : frameCount <= 1);
+
+      // A still image has no intrinsic length. When the decoder only
+      // reported one frame, that value is replaced by the reference's
+      // fallback — but a still that reports a real length (an animated
+      // image) keeps it.
+      const duration =
+        isStill && looksLikeOneFrame
+          ? STILL_IMAGE_DEFAULT_DURATION_US
+          : durationUs > 0
+            ? durationUs
+            : STILL_IMAGE_DEFAULT_DURATION_US;
 
       return {
         duration,
@@ -450,10 +483,22 @@ async function tryFfprobe(abs: string): Promise<MediaProbe | null> {
         // A still image may be placed on the timeline for any length; only its
         // intrinsic duration is unknown.
         stillImage: isStill,
+        // The material type follows the reference implementation, which
+        // classifies an image as "photo" and gives it a 3 hour duration.
+        materialType: isStill ? "photo" : "video",
+        materialDuration: isStill ? STILL_IMAGE_MATERIAL_DURATION_US : duration,
       };
     }
     if (audio) {
-      return { duration: durationUs, width: 0, height: 0, kind: "audio" };
+      // A decoder that cannot report a duration must not leave the material
+      // without one. The reference falls back to 10 seconds in the same
+      // situation.
+      return {
+        duration: durationUs > 0 ? durationUs : STILL_IMAGE_DEFAULT_DURATION_US,
+        width: 0,
+        height: 0,
+        kind: "audio",
+      };
     }
     return null;
   } catch {
@@ -485,7 +530,7 @@ interface TrackState {
 
 interface MaterialEntry {
   id: string;
-  kind: "video" | "audio" | "text" | "speed" | "audio_fade";
+  kind: "video" | "photo" | "audio" | "text" | "speed" | "audio_fade";
   data: Record<string, unknown>;
 }
 
@@ -813,10 +858,12 @@ export class Draft {
         },
       });
     } else {
+      const materialType = probe.materialType ?? "video";
       this.addMaterial({
         id: materialId,
-        kind: "video",
-        data: {          audio_fade: null,
+        kind: materialType === "photo" ? "photo" : "video",
+        data: {
+          audio_fade: null,
           category_id: "",
           category_name: "local",
           check_flag: 63487,
@@ -828,12 +875,10 @@ export class Draft {
           },
           crop_ratio: "free",
           crop_scale: 1.0,
-          // A still image has no intrinsic length. The reference
-          // implementation gives it a 3 hour material duration so that a
-          // clip of any length still fits inside the material.
-          duration: probe.stillImage
-            ? STILL_IMAGE_MATERIAL_DURATION_US
-            : probe.duration,
+          // The material duration follows the reference implementation: a
+          // still image gets 3 hours, so a clip of any length still fits
+          // inside the material.
+          duration: probe.materialDuration ?? probe.duration,
           height: probe.height,
           id: materialId,
           local_material_id: stagedName.replace(/\.[^.]+$/, ""),
@@ -841,7 +886,7 @@ export class Draft {
           material_name: stagedName,
           media_path: "",
           path: stagedPath,
-          type: "video",
+          type: materialType,
           video_algorithm: {
             algorithms: [],
             complement_frame_config: null,
@@ -1203,7 +1248,7 @@ export class Draft {
         if (timerangesOverlap(existing.targetTimerange, range)) {
           throw new Error(
             `SegmentOverlap: subtitle line ${i + 1} [start: ${range.start}, end: ${range.start + range.duration}] ` +
-              `overlaps an existing segment on track text/0 ` +
+              `overlaps an existing segment on track text/${track.index} ` +
               `[start: ${existing.targetTimerange.start}, end: ${existing.targetTimerange.start + existing.targetTimerange.duration}]`,
           );
         }
@@ -1350,7 +1395,11 @@ export class Draft {
       this.materials.delete(orphan.id);
       // A staged media file that no segment uses is deleted from disk too —
       // unless a surviving material still references the same file.
-      if (orphan.kind === "video" || orphan.kind === "audio") {
+      if (
+        orphan.kind === "video" ||
+        orphan.kind === "photo" ||
+        orphan.kind === "audio"
+      ) {
         const stagedPath = String((orphan.data as any).path ?? "");
         if (
           stagedPath &&
@@ -1455,12 +1504,15 @@ export class Draft {
     for (const key of EMPTY_MATERIAL_KEYS) materials[key] = [];
 
     for (const entry of this.materialOrder) {
+      // A photo keeps the "photo" type inside the `videos` bucket, which is
+      // where the reference implementation puts every video material — its
+      // `images` bucket is always empty.
       const bucket =
         entry.kind === "speed"
           ? "speeds"
           : entry.kind === "audio_fade"
             ? "audio_fades"
-            : entry.kind === "video"
+            : entry.kind === "video" || entry.kind === "photo"
               ? "videos"
               : entry.kind === "audio"
                 ? "audios"
