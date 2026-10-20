@@ -1180,6 +1180,42 @@ async function main() {
       saved.materials?.effects,
     );
   }
+
+  // A key the loaded draft holds and this engine does not model has to
+  // come back out of the saved draft. The reference implementation keeps the
+  // whole loaded document and only overwrites the keys it models, so a
+  // newer JianYing that adds a key does not lose it here.
+  {
+    const extraName = "ExtraKeys";
+    const extraDir = path.join(DRAFTS_ROOT, extraName);
+    fs.mkdirSync(extraDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(extraDir, "draft_info.json"),
+      JSON.stringify({
+        tracks: [],
+        materials: { videos: [], audios: [], texts: [], speeds: [] },
+        canvas_config: { width: 1920, height: 1080 },
+        config: { future_setting: { on: true } },
+        future_top_level: "keep me",
+      }),
+      "utf8",
+    );
+    await client.call("jianying_open_draft", { name: extraName });
+    await client.call("jianying_save_draft", { name: extraName });
+    const saved = JSON.parse(
+      fs.readFileSync(path.join(extraDir, "draft_info.json"), "utf8"),
+    );
+    check(
+      "an unknown top-level key survives the round trip",
+      saved.future_top_level === "keep me",
+      saved.future_top_level,
+    );
+    check(
+      "an unknown config key survives the round trip",
+      JSON.stringify(saved.config?.future_setting) === JSON.stringify({ on: true }),
+      saved.config?.future_setting,
+    );
+  }
   check(
     "loading and saving keeps the unmodelled material",
     (seededAfter.materials.effects ?? []).length === 1 &&

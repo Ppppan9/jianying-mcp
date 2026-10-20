@@ -206,6 +206,21 @@ const MUTATIONS: Array<{ name: string; from: string; to: string; file?: string }
     to: "        void items;\n      }",
     file: "draft.ts",
   },
+  {
+    // The reference keeps the whole loaded document and only overwrites
+    // the keys it models. Rebuilding the file would drop a key a newer
+    // JianYing had added.
+    name: "an unknown top-level key is dropped",
+    from: "      if (!(key in built)) built[key] = value;",
+    to: "      if (false) built[key] = value;",
+    file: "draft.ts",
+  },
+  {
+    name: "an unknown config key is dropped",
+    from: "      config: {\n        ...this.loadedConfig,",
+    to: "      config: {",
+    file: "draft.ts",
+  },
 ];
 
 function run(cmd: string, args: string[], env: NodeJS.ProcessEnv = {}): boolean {

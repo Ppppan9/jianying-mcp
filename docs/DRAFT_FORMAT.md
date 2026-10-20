@@ -510,6 +510,32 @@ model them, so a loaded draft keeps them verbatim and writes them back on
 save — the same thing the reference implementation does with its imported
 materials.
 
+A bucket whose value is not a list is malformed, but it is still the user's
+data, so it is carried through as it is rather than being replaced by an
+empty list.
+
+### Keys the engine does not write are carried through
+
+The reference implementation loads the whole `draft_info.json` into a
+document and, on save, overwrites only the handful of keys it models:
+`fps`, `duration`, `config.maintrack_adsorb`, `canvas_config`, `materials`
+and `tracks`. Everything else in the file survives.
+
+This project writes the same keys, so a key a newer JianYing had added —
+at the top level or inside `config` — would be dropped on the next save.
+Both are carried through now: the engine's own values win where it models
+a key, and everything else is written back as it was loaded.
+
+### A draft that is not a draft is refused
+
+`draft_info.json` has to be an object with a `tracks` array. A file that
+holds an array, a string or `null` parses fine, and every property read
+from it returns undefined — so it used to be read as an empty draft, and
+saving it would have overwritten the user's file with nothing. A `null`
+threw a TypeError about reading "fps". Both are refused now, before
+anything is read from the file, and a refused draft is left exactly as it
+was found.
+
 A draft also keeps a **media bin**: clips that are staged in `materials/`
 but not referenced by any segment. Those are the user's working material;
 they survive a load and save untouched.

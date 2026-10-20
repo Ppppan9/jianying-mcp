@@ -528,6 +528,17 @@ export class Draft {
      * loaded draft so that saving does not strip them.
      */
     unmodelledBuckets = {};
+    /**
+     * The top-level keys of a loaded draft that this engine does not write.
+     *
+     * The reference implementation keeps the whole loaded document and only
+     * overwrites the keys it models. Rebuilding the file from scratch would
+     * drop a key a newer JianYing had added, so the unknown ones are carried
+     * through.
+     */
+    loadedTopLevel = {};
+    /** The `config` of a loaded draft, so its unknown keys survive too. */
+    loadedConfig = {};
     /** Ids of the materials this engine created, as opposed to loaded ones. */
     createdMaterialIds = new Set();
     /**
@@ -632,6 +643,13 @@ export class Draft {
         }
         this.explicitResolution = true;
         this.resolutionResolved = true;
+        // Keep what the loaded draft held, so the save can put back anything
+        // this engine does not model.
+        this.loadedTopLevel = { ...info };
+        this.loadedConfig =
+            info.config && typeof info.config === "object" && !Array.isArray(info.config)
+                ? { ...info.config }
+                : {};
         const config = info.config ?? {};
         this.configFlags = {
             maintrackAdsorb: Boolean(config.maintrack_adsorb),
@@ -1561,7 +1579,7 @@ export class Draft {
             segments: t.segments.map((s) => this.serializeSegment(t, s)),
             type: t.type,
         }));
-        return {
+        const built = {
             business_info: null,
             canvas_config: {
                 height: this.canvasHeight,
@@ -1574,6 +1592,7 @@ export class Draft {
                 quality_enhance: false,
             },
             config: {
+                ...this.loadedConfig,
                 adjust_max_index: 1,
                 attachment_info: [],
                 combination_max_index: 1,
@@ -1638,6 +1657,15 @@ export class Draft {
                 quality_enhance: null,
             },
         };
+        // Everything the loaded draft held that this engine does not write is
+        // carried through. The reference implementation keeps the whole loaded
+        // document and only overwrites the handful of keys it models, so a
+        // newer JianYing that adds a key does not lose it on the next save.
+        for (const [key, value] of Object.entries(this.loadedTopLevel)) {
+            if (!(key in built))
+                built[key] = value;
+        }
+        return built;
     }
     serializeSegment(track, seg) {
         // Every segment references its Speed material through extra_material_refs.
