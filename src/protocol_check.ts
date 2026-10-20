@@ -364,6 +364,58 @@ async function main() {
     }
   }
 
+  // --- an in-flight call must survive the peer closing the pipe ----------
+  {
+    const mediaDir = process.argv[2] ?? path.join(here, "..", "test-media");
+    const clip = path.join(mediaDir, "vid1.mp4");
+    if (!fs.existsSync(clip)) {
+      console.log(
+        "  \x1b[33m-\x1b[0m an in-flight call survives the peer closing the pipe — skipped, no test media",
+      );
+    } else {
+      const work2 = fs.mkdtempSync(path.join(os.tmpdir(), "jy-shut-"));
+      const root2 = path.join(work2, "drafts");
+      fs.mkdirSync(root2, { recursive: true });
+      const payload =
+        JSON.stringify({
+          jsonrpc: "2.0",
+          id: 1,
+          method: "tools/call",
+          params: {
+            name: "jianying_open_draft",
+            arguments: { name: "Shutdown", draftsRoot: root2 },
+          },
+        }) +
+        "\n" +
+        JSON.stringify({
+          jsonrpc: "2.0",
+          id: 2,
+          method: "tools/call",
+          params: {
+            name: "jianying_add_video",
+            arguments: { name: "Shutdown", filePath: clip, start: 0, duration: 2 },
+          },
+        }) +
+        "\n";
+
+      // The pipe closes while ffprobe is still running.
+      const r = await exchange(payload, { waitMs: 10000 });
+      const messages = parse(r.lines);
+      const add = messages.find((m) => m.id === 2);
+      if (r.signal === "SIGKILL") {
+        bad("an in-flight call survives the peer closing the pipe", "the server never exited");
+      } else if (!add || add.result?.isError) {
+        bad(
+          "an in-flight call survives the peer closing the pipe",
+          `the call was cut off: ${JSON.stringify(add).slice(0, 200)}`,
+        );
+      } else {
+        ok("an in-flight call survives the peer closing the pipe");
+      }
+      fs.rmSync(work2, { recursive: true, force: true });
+    }
+  }
+
   // --- a large single line must not wedge the server -----------------------
   {
     const huge = "x".repeat(17 * 1024 * 1024);

@@ -101,7 +101,11 @@ export function validateAgainstSchema(schema, value, path = "") {
             // Unknown keys are refused rather than ignored. Every key of this API
             // changes the edit, so a key the server does not know is a mistake the
             // caller needs to hear about.
-            const unknown = Object.keys(obj).filter((key) => !(key in properties));
+            //
+            // The membership test has to be an own-property test. `key in
+            // properties` walks the prototype chain, so "__proto__", "constructor"
+            // and "toString" would all look like known keys and slip through.
+            const unknown = Object.keys(obj).filter((key) => !Object.prototype.hasOwnProperty.call(properties, key));
             if (unknown.length > 0) {
                 const accepted = Object.keys(properties);
                 errors.push(`unknown argument${unknown.length > 1 ? "s" : ""} ` +
