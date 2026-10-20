@@ -278,6 +278,48 @@ async function main() {
     expect("a misspelled argument is refused, not ignored", r, 1, isErrorResult);
   }
   {
+    // "__proto__" has to reach the server as an own property. An object
+    // literal with "__proto__" in it sets the prototype instead of creating a
+    // property, so the argument is built with JSON.parse.
+    const payload = JSON.stringify({
+      jsonrpc: "2.0",
+      id: 1,
+      method: "tools/call",
+      params: {
+        name: "jianying_open_draft",
+        arguments: JSON.parse('{"name":"Pollute","__proto__":{"polluted":true}}'),
+      },
+    });
+    const r = await exchange(payload);
+    expect("an argument named __proto__ is refused", r, 1, isErrorResult);
+  }
+  {
+    const payload = JSON.stringify({
+      jsonrpc: "2.0",
+      id: 1,
+      method: "tools/call",
+      params: {
+        name: "jianying_open_draft",
+        arguments: { name: "Pollute2", constructor: { prototype: { x: 1 } } },
+      },
+    });
+    const r = await exchange(payload);
+    expect("an argument named constructor is refused", r, 1, isErrorResult);
+  }
+  {
+    const payload = JSON.stringify({
+      jsonrpc: "2.0",
+      id: 1,
+      method: "tools/call",
+      params: {
+        name: "jianying_open_draft",
+        arguments: { name: "Pollute3", toString: "x" },
+      },
+    });
+    const r = await exchange(payload);
+    expect("an argument named toString is refused", r, 1, isErrorResult);
+  }
+  {
     const r = await exchange(
       request("jianying_open_draft", "", { name: "NestedStyle" }, { draftsRoot }),
     );
@@ -292,7 +334,9 @@ async function main() {
   // Nothing may be written to the drafts root by a refused call.
   {
     const leftovers = fs.readdirSync(draftsRoot);
-    const bad2 = leftovers.filter((n) => n === "undefined" || n === "123" || n === "a,b");
+    const bad2 = leftovers.filter(
+      (n) => n === "undefined" || n === "123" || n === "a,b" || n.startsWith("Pollute"),
+    );
     if (bad2.length > 0) {
       bad("a refused call writes nothing to disk", `left behind: ${bad2.join(", ")}`);
     } else {

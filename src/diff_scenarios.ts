@@ -498,11 +498,14 @@ function diff(a: any, b: any, pathStr = "", keyName = ""): string[] {
       }
       continue;
     }
-    if (!(k in a)) {
+    // The membership test has to be an own-property test. `k in a` walks the
+    // prototype chain, so a key named "constructor" or "toString" would look
+    // present on both sides and the difference would be missed.
+    if (!Object.prototype.hasOwnProperty.call(a, k)) {
       out.push(`${pathStr}.${k}: only in mcp (${JSON.stringify(b[k])?.slice(0, 80)})`);
       continue;
     }
-    if (!(k in b)) {
+    if (!Object.prototype.hasOwnProperty.call(b, k)) {
       out.push(`${pathStr}.${k}: only in upstream (${JSON.stringify(a[k])?.slice(0, 80)})`);
       continue;
     }

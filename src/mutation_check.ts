@@ -119,8 +119,17 @@ const MUTATIONS: Array<{ name: string; from: string; to: string; file?: string }
   },
   {
     name: "unknown arguments ignored",
-    from: "      const unknown = Object.keys(obj).filter((key) => !(key in properties));",
+    from: "      const unknown = Object.keys(obj).filter(\n        (key) => !Object.prototype.hasOwnProperty.call(properties, key),\n      );",
     to: "      const unknown: string[] = [];",
+    file: "schema_validate.ts",
+  },
+  {
+    // The membership test has to be an own-property test. `key in properties`
+    // walks the prototype chain, so "__proto__" and "constructor" would look
+    // like known keys and slip past the check.
+    name: "prototype-named arguments slip past the unknown-key check",
+    from: "        (key) => !Object.prototype.hasOwnProperty.call(properties, key),",
+    to: "        (key) => !(key in properties),",
     file: "schema_validate.ts",
   },
   {
