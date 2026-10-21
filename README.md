@@ -484,6 +484,25 @@ being dropped, and it names them when they are lost again.
 
 完整契约见 [`docs/DRAFT_FORMAT.md`](docs/DRAFT_FORMAT.md)。
 
+### Installing the verification drafts
+
+```bash
+python3 scripts/install_drafts.py          # shows the plan
+python3 scripts/install_drafts.py --apply  # does it
+```
+
+The drafts have to be **registered**, not just copied: JianYing reads its
+project list from `root_meta_info.json` in the drafts root, so a folder that
+is not in that registry is never shown. The installer copies each draft,
+rewrites the material paths to point at the copy, and registers it with the
+same id the draft already carries.
+
+It also warns when JianYing is running: the application reads the registry
+once, when it starts, and rewrites it while it runs — so a draft installed
+into a running application is never seen, and its registry entry can be
+overwritten before the next start. **Quit JianYing completely (⌘Q) and
+reopen it after installing.**
+
 ### 已知限制
 
 - **导出必须手动**：macOS 上剪映没有可靠的无头渲染通道
