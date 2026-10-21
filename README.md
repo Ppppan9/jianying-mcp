@@ -207,7 +207,7 @@ node dist/format_check.js
 [6] protocol_check.js   Protocol: 34 passed, 0 failed
 [7] mutation_check.js   Mutations: 34 of 34 caught, 0 survived
 [8] docs_check.js      Documentation: 40 passed, 0 failed
-[9] loader_check.js    Loader: 20 passed, 0 failed
+[9] loader_check.js    Loader: 21 passed, 0 failed
 [10] format_check.js   Format: 7 passed, 0 failed
 ```
 
@@ -432,7 +432,7 @@ redistributed here.
 [6] protocol_check.js   Protocol: 34 passed, 0 failed
 [7] mutation_check.js   Mutations: 34 of 34 caught, 0 survived
 [8] docs_check.js      Documentation: 40 passed, 0 failed
-[9] loader_check.js    Loader: 20 passed, 0 failed
+[9] loader_check.js    Loader: 21 passed, 0 failed
 [10] format_check.js   Format: 7 passed, 0 failed
 ```
 
@@ -487,6 +487,9 @@ being dropped, and it names them when they are lost again.
 ### 已知限制
 
 - **导出必须手动**：macOS 上剪映没有可靠的无头渲染通道
+- **剪映 11 写出的草稿读不了**：11 及以后的版本把 `draft_info.json` 加密，而且换了一套自己的时间轴结构。
+  工具**写出的草稿剪映能正常打开**（本机 11.6 实测通过），但**剪映保存过的草稿工具读不回来** ——
+  报错会明确说明原因。继续在剪映里改就用剪映改；要继续用工具改，就另建一个草稿。
 - 只覆盖视频 / 音频 / 文字核心，暂不含关键帧、特效、转场、贴纸
 - 不集成剪映云端素材库
 - 与字节无关，剪映 / CapCut 是其各自所有者的商标

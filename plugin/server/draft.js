@@ -623,11 +623,23 @@ export class Draft {
                 `Use jianying_create_draft to make a new draft.`);
         }
         let info;
+        let raw = "";
         try {
-            info = JSON.parse(fs.readFileSync(infoPath, "utf8"));
+            raw = fs.readFileSync(infoPath, "utf8");
+            info = JSON.parse(raw);
         }
         catch (error) {
             const message = error instanceof Error ? error.message : String(error);
+            // JianYing 11 writes its drafts encrypted, so the file is not JSON at
+            // all. Saying "not valid JSON" would send the caller looking for a
+            // broken file; the file is fine, it is in a format this tool does not
+            // read.
+            if (!/^\s*[{[]/.test(raw) && /^[A-Za-z0-9+/=\s]+$/.test(raw.trim().slice(0, 200))) {
+                throw new Error(`Cannot open "${this.name}": ${this.dir}/draft_info.json was written by ` +
+                    `JianYing 11 or later, which encrypts its drafts. This tool reads the ` +
+                    `plain format it writes, not the one JianYing writes. Keep editing ` +
+                    `this draft in JianYing, or start a new draft with the tool.`);
+            }
             throw new Error(`Cannot open "${this.name}": ${this.dir}/draft_info.json is not valid JSON (${message}).`);
         }
         // The file has to be a draft, not merely something that parses.

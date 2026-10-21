@@ -134,6 +134,16 @@ const CASES: Case[] = [
   { name: "a very deep structure", info: deepJson(2000) },
   { name: "a byte order mark", info: "﻿" + JSON.stringify(MINIMAL) },
   {
+    // JianYing 11 writes its drafts encrypted. The file is not broken, it
+    // is in a format this tool does not read, and the message has to say so
+    // rather than "not valid JSON".
+    name: "a draft encrypted by JianYing",
+    info:
+      "a127MeSg7JcybBBN1ydsJ1J2hijZyAHoJ9FI6ogDB7ag35j49I1bJgxgFpWb" +
+      "aGFsbGlnaGFzaGVmaGFzaGZqYWxmaGFqYWxmYWxmaGFqYWxmaA==",
+    expect: /encrypts its drafts|written by JianYing 11/,
+  },
+  {
     name: "a material bucket that is not a list",
     info: JSON.stringify({
       tracks: [],
