@@ -57,8 +57,8 @@ cp -r jianying-mcp/plugin ~/.minimax/plugins/jianying-editor
 ```
 
 Or take the prebuilt package from the
-[latest release](https://github.com/Ppppan9/jianying-mcp/releases/latest):
-`jianying-editor-plugin-v1.20.0.tar.gz` — self-contained, no build step.
+[latest release](https://github.com/Ppppan9/jianying-mcp/releases/latest)
+(`jianying-editor-plugin-vX.Y.Z.tar.gz`) — self-contained, no build step.
 
 Restart MiniMax Code. The plugin is discovered automatically and the
 `jianying-editor` MCP server becomes available.
