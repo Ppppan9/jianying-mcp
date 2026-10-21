@@ -727,7 +727,86 @@ function checkRoundTrip(): { label: string; problems: string[] } {
     }
   }
 
+  // The reference implementation loads the whole document and overwrites
+  // only the keys it models, so everything else survives. The same has to
+  // hold here — and the reference says exactly which keys those are, so the
+  // two can be compared on the question directly.
+  problems.push(...compareWithReferenceRoundTrip(seedDir, before, after));
+
   return { label, problems };
+}
+
+/**
+ * Runs the seed through the reference implementation and compares which
+ * keys survived with the ones that survived here.
+ *
+ * The question is not "are the files identical" — the two write the
+ * timeline differently. It is "does this implementation keep what the
+ * reference keeps", which is the property that decides whether a user's
+ * file loses anything.
+ */
+function compareWithReferenceRoundTrip(
+  seedDir: string,
+  before: any,
+  after: any,
+): string[] {
+  const problems: string[] = [];
+  const outDir = path.join(WORK, "roundtrip-upstream");
+  fs.rmSync(outDir, { recursive: true, force: true });
+
+  let summary: any;
+  try {
+    const stdout = execFileSync(
+      UP_PY,
+      [
+        path.join(__dirname, "..", "scripts", "roundtrip_upstream.py"),
+        seedDir,
+        outDir,
+      ],
+      {
+        encoding: "utf8",
+        timeout: 120_000,
+        env: { ...process.env, JY_UPSTREAM_SKILL: UPSTREAM_SKILL },
+      },
+    );
+    summary = JSON.parse(stdout);
+  } catch (error) {
+    problems.push(
+      `the reference round trip could not be run: ${(error as Error).message.slice(0, 160)}`,
+    );
+    return problems;
+  }
+
+  const seedTop = new Set(Object.keys(before));
+  const seedConfig = new Set(Object.keys(before.config ?? {}));
+  const seedBuckets = new Set(Object.keys(before.materials ?? {}));
+
+  const ours = {
+    top_level_survived: [...seedTop].filter((key) => key in after).sort(),
+    config_survived: [...seedConfig].filter((key) => key in (after.config ?? {})).sort(),
+    buckets_survived: [...seedBuckets].filter(
+      (key) => key in (after.materials ?? {}),
+    ).sort(),
+  };
+
+  const compare = (
+    label: string,
+    mine: string[],
+    theirs: string[],
+  ) => {
+    const missing = theirs.filter((key) => !mine.includes(key));
+    if (missing.length > 0) {
+      problems.push(
+        `${label}: the reference keeps ${missing.join(", ")}, this implementation does not`,
+      );
+    }
+  };
+
+  compare("top-level keys", ours.top_level_survived, summary.top_level_survived ?? []);
+  compare("config keys", ours.config_survived, summary.config_survived ?? []);
+  compare("material buckets", ours.buckets_survived, summary.buckets_survived ?? []);
+
+  return problems;
 }
 
 main().catch((e) => {

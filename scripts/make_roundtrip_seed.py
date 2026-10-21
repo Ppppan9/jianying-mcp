@@ -47,11 +47,16 @@ def build() -> dict:
             "system_font_list": [],
             "video_mute": False,
             "zoom_info_params": None,
+            # A key this engine does not model. A newer JianYing might add
+            # one, and it has to survive a load and save.
+            "future_config_setting": {"on": True},
         },
         "cover": None,
         "create_time": 1700000000000,
         "duration": 4000000,
         "extra_info": None,
+        # Likewise at the top level.
+        "future_top_level_key": "keep me",
         "fps": 30,
         "free_render_index_mode_on": False,
         "group_container": None,

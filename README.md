@@ -240,6 +240,14 @@ seeded with effects, stickers, transitions and a media bin is opened, saved
 and compared. It is what catches the silent data loss that a
 generate-and-compare check cannot see.
 
+The round trip is compared against the **reference implementation's own**
+round trip on the same seed. The question is not whether the two files are
+identical — they write the timeline differently — but whether this
+implementation keeps what the reference keeps. The reference loads the
+whole document and overwrites only the keys it models; everything else
+survives. That comparison is what found the top-level and config keys
+being dropped, and it names them when they are lost again.
+
 Layer 2 is the important one: it drives the **underlying `pyJianYingDraft`
 library**, not the wrapper skill, because the wrapper silently drops clip
 speed, audio fades and out-of-range validation. It covers still images, clip
@@ -435,6 +443,14 @@ The differential harness also runs a **load → save round trip**: a draft
 seeded with effects, stickers, transitions and a media bin is opened, saved
 and compared. It is what catches the silent data loss that a
 generate-and-compare check cannot see.
+
+The round trip is compared against the **reference implementation's own**
+round trip on the same seed. The question is not whether the two files are
+identical — they write the timeline differently — but whether this
+implementation keeps what the reference keeps. The reference loads the
+whole document and overwrites only the keys it models; everything else
+survives. That comparison is what found the top-level and config keys
+being dropped, and it names them when they are lost again.
 
 第 2 层最关键：它驱动的是**底层 `pyJianYingDraft` 库**而不是上游 wrapper —— 因为 wrapper 会静默丢掉变速、音频淡入淡出和越界校验。覆盖静图、变速、源偏移、多轨道、淡入淡出、边界时长、文本与字幕样式、重叠、越界请求、素材移除。
 

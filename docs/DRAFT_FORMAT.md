@@ -644,6 +644,13 @@ fields, the wrong `render_index`, two misspelled material buckets, inverted
 clip-speed semantics, and `attribute` being used as a track index instead of
 a mute flag. All of them are fixed.
 
+### The round trip is compared with the reference's own
+
+The seed is put through the reference implementation as well, and the two
+are compared on which keys survived. The files are not identical — the two
+write the timeline differently — but the question that matters is whether
+this implementation keeps what the reference keeps.
+
 ### Probing the reference contract directly
 
 ```bash
