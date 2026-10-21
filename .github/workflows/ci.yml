@@ -51,6 +51,9 @@ jobs:
       - name: Validate the Plugin package
         run: python3 scripts/validate_plugin.py plugin
 
+      - name: The versions have to agree
+        run: python3 scripts/check_version.py
+
       - name: Verify the Plugin bundle matches the build output
         run: |
           # Syncing first and then checking the working tree catches a stale

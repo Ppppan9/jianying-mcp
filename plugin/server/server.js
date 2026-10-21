@@ -13,10 +13,36 @@
  */
 import fs from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { Draft, formatSrtTime, listDrafts, parseSeconds, probeMedia, resolveDraftsRoot, sanitizeDraftName, splitSubtitleLines, } from "./draft.js";
 import { validateAgainstSchema } from "./schema_validate.js";
 const PROTOCOL_VERSION = "2024-11-05";
-const SERVER_INFO = { name: "jianying-mcp", version: "1.0.0" };
+/**
+ * The version this server reports.
+ *
+ * It is read from the file that already carries it, so the server cannot
+ * claim a version the package does not have. The plugin manifest is checked
+ * first because that is what a Plugin user sees; the repository's
+ * package.json is the fallback for running from a checkout.
+ */
+function resolveVersion() {
+    const here = path.dirname(fileURLToPath(import.meta.url));
+    for (const candidate of [
+        path.join(here, "..", ".minimax-plugin", "plugin.json"),
+        path.join(here, "..", "package.json"),
+    ]) {
+        try {
+            const data = JSON.parse(fs.readFileSync(candidate, "utf8"));
+            if (typeof data.version === "string" && data.version)
+                return data.version;
+        }
+        catch {
+            /* try the next one */
+        }
+    }
+    return "0.0.0";
+}
+const SERVER_INFO = { name: "jianying-mcp", version: resolveVersion() };
 /**
  * Drafts are opened by name and kept in a registry so consecutive tool calls
  * operate on the same in-memory timeline.
