@@ -756,6 +756,14 @@ export class Draft {
    * Material buckets this engine does not model, carried through from a
    * loaded draft so that saving does not strip them.
    */
+  /**
+   * This draft's identity.
+   *
+   * It appears in draft_info.json, in draft_meta_info.json and in the root
+   * registry. The application keys its project cache by it, so two drafts
+   * must never share one.
+   */
+  readonly draftId: string;
   private unmodelledBuckets: Record<string, unknown> = {};
   /**
    * The top-level keys of a loaded draft that this engine does not write.
@@ -796,6 +804,7 @@ export class Draft {
 
   constructor(options: DraftOptions) {
     this.name = sanitizeName(options.name);
+    this.draftId = randomUUID().toUpperCase();
     this.width = normalizeCanvasSize(options.width, 1920, "width");
     this.height = normalizeCanvasSize(options.height, 1080, "height");
     this.fps = normalizeFps(options.fps);
@@ -2017,7 +2026,10 @@ export class Draft {
       fps: this.fps,
       free_render_index_mode_on: false,
       group_container: null,
-      id: "91E08AC5-22FB-47e2-9AA0-7DC300FAEA2B",
+      // Every draft needs its own id. The reference template has one fixed
+      // value, which means two drafts made with it share an identity — and
+      // the application keys its caches by it.
+      id: this.draftId,
       keyframe_graph_list: [],
       keyframes: {
         adjusts: [], audios: [], effects: [], filters: [],
@@ -2141,7 +2153,7 @@ export class Draft {
 
     try {
       staged("draft_info.json", JSON.stringify(this.buildDraftInfo(), null, 4));
-      staged("draft_meta_info.json", JSON.stringify(buildMetaInfo(this.name), null, 4));
+      staged("draft_meta_info.json", JSON.stringify(buildMetaInfo(this.name, this.draftId), null, 4));
       staged(
         "draft_settings",
         [
@@ -2615,11 +2627,16 @@ function sanitizeName(name: string): string {
  * Builds the draft_meta_info.json registry entry.
  * Key set mirrors the upstream draft_meta_info.json template exactly.
  */
-export function buildMetaInfo(name: string): Record<string, unknown> {
+export function buildMetaInfo(name: string, id?: string): Record<string, unknown> {
   // The reference template uses a dashed, UUID-shaped id derived from the
   // draft name; a plain hex digest is a different shape.
+  // The id has to be the same in draft_info.json, in this file and in the
+  // root registry, or the application cannot tell which project the file
+  // belongs to. It is derived from the name when the caller does not have
+  // one, so the same draft always gets the same id.
   const hex = createHash("md5").update(name).digest("hex").toUpperCase();
-  const draftId = `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+  const draftId =
+    id ?? `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
   return {
     cloud_package_completed_time: "",
     draft_cloud_capcut_purchase_info: "",
