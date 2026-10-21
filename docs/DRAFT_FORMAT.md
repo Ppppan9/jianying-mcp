@@ -517,14 +517,22 @@ empty list.
 ### Keys the engine does not write are carried through
 
 The reference implementation loads the whole `draft_info.json` into a
-document and, on save, overwrites only the handful of keys it models:
-`fps`, `duration`, `config.maintrack_adsorb`, `canvas_config`, `materials`
-and `tracks`. Everything else in the file survives.
+document and, on save, overwrites only six keys: `fps`, `duration`,
+`config.maintrack_adsorb`, `canvas_config`, `materials` and `tracks`.
+Everything else in the file survives.
 
-This project writes the same keys, so a key a newer JianYing had added —
-at the top level or inside `config` — would be dropped on the next save.
+This project writes the same six keys, so a key a newer JianYing had added
+— at the top level or inside `config` — would be dropped on the next save.
 Both are carried through now: the engine's own values win where it models
 a key, and everything else is written back as it was loaded.
+
+That includes the **project id**. Writing our own id on every save would
+change it each time, and JianYing may then treat the draft as a different
+project. The same goes for `create_time`, `platform` and the rest of the
+document: the reference keeps them, so this implementation does too.
+
+A generated draft is unchanged by all of this — there is nothing loaded to
+carry.
 
 ### A draft that is not a draft is refused
 

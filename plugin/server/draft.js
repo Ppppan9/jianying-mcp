@@ -1657,12 +1657,17 @@ export class Draft {
                 quality_enhance: null,
             },
         };
-        // Everything the loaded draft held that this engine does not write is
-        // carried through. The reference implementation keeps the whole loaded
-        // document and only overwrites the handful of keys it models, so a
-        // newer JianYing that adds a key does not lose it on the next save.
+        // Everything the loaded draft held that this engine does not model is
+        // carried through.
+        //
+        // The reference implementation overwrites exactly six keys when it
+        // saves: fps, duration, config.maintrack_adsorb, canvas_config,
+        // materials and tracks. Every other key keeps the value the draft was
+        // loaded with — including the project id, which would otherwise change
+        // on every save and make JianYing treat the draft as a different
+        // project.
         for (const [key, value] of Object.entries(this.loadedTopLevel)) {
-            if (!(key in built))
+            if (!MODELLED_TOP_LEVEL.has(key))
                 built[key] = value;
         }
         return built;
@@ -1985,6 +1990,22 @@ function normalizeStyle(partial, base) {
         },
     };
 }
+/**
+ * The top-level keys this engine models, and therefore writes itself.
+ *
+ * The reference implementation overwrites exactly these when it saves:
+ * `fps`, `duration`, `config.maintrack_adsorb`, `canvas_config`,
+ * `materials` and `tracks`. Every other key of a loaded draft keeps the
+ * value it was loaded with.
+ */
+const MODELLED_TOP_LEVEL = new Set([
+    "canvas_config",
+    "config",
+    "duration",
+    "fps",
+    "materials",
+    "tracks",
+]);
 /**
  * Names a JSON value for an error message.
  */

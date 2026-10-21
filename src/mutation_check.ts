@@ -211,7 +211,7 @@ const MUTATIONS: Array<{ name: string; from: string; to: string; file?: string }
     // the keys it models. Rebuilding the file would drop a key a newer
     // JianYing had added.
     name: "an unknown top-level key is dropped",
-    from: "      if (!(key in built)) built[key] = value;",
+    from: "      if (!MODELLED_TOP_LEVEL.has(key)) built[key] = value;",
     to: "      if (false) built[key] = value;",
     file: "draft.ts",
   },
@@ -219,6 +219,14 @@ const MUTATIONS: Array<{ name: string; from: string; to: string; file?: string }
     name: "an unknown config key is dropped",
     from: "      config: {\n        ...this.loadedConfig,",
     to: "      config: {",
+    file: "draft.ts",
+  },
+  {
+    // The reference overwrites six keys when it saves. If the engine writes
+    // the others too, the project id changes on every save.
+    name: "the project id is rewritten on save",
+    from: "const MODELLED_TOP_LEVEL = new Set([\n  \"canvas_config\",",
+    to: "const MODELLED_TOP_LEVEL = new Set([\n  \"id\",\n  \"canvas_config\",",
     file: "draft.ts",
   },
 ];

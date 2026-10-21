@@ -195,14 +195,14 @@ node dist/loader_check.js
 ```
 
 ```
-[1] verify.js            Result: 171 passed, 0 failed
+[1] verify.js            Result: 173 passed, 0 failed
 [2] diff_scenarios.js    Scenarios: 12 matched, 0 differed
 [3] compare_drafts.py    [A] Structural diff: 0 difference(s)
                          VERDICT: PASS
 [4] compare_meta_info.py VERDICT: MATCH (25 fields vs the reference template)
 [5] guard_coverage.js  Guards: 34 enforced, 0 not enforced
 [6] protocol_check.js   Protocol: 34 passed, 0 failed
-[7] mutation_check.js   Mutations: 31 of 31 caught, 0 survived
+[7] mutation_check.js   Mutations: 32 of 32 caught, 0 survived
 [8] docs_check.js      Documentation: 40 passed, 0 failed
 [9] loader_check.js    Loader: 20 passed, 0 failed
 ```
@@ -419,14 +419,14 @@ redistributed here.
 用上游实现当预言机，分三层逐字段对比：
 
 ```
-[1] verify.js            Result: 171 passed, 0 failed
+[1] verify.js            Result: 173 passed, 0 failed
 [2] diff_scenarios.js    Scenarios: 12 matched, 0 differed
 [3] compare_drafts.py    [A] Structural diff: 0 difference(s)
                          VERDICT: PASS
 [4] compare_meta_info.py VERDICT: MATCH (25 fields vs the reference template)
 [5] guard_coverage.js  Guards: 34 enforced, 0 not enforced
 [6] protocol_check.js   Protocol: 34 passed, 0 failed
-[7] mutation_check.js   Mutations: 31 of 31 caught, 0 survived
+[7] mutation_check.js   Mutations: 32 of 32 caught, 0 survived
 [8] docs_check.js      Documentation: 40 passed, 0 failed
 [9] loader_check.js    Loader: 20 passed, 0 failed
 ```

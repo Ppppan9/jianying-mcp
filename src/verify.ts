@@ -1197,6 +1197,8 @@ async function main() {
         canvas_config: { width: 1920, height: 1080 },
         config: { future_setting: { on: true } },
         future_top_level: "keep me",
+        id: "PROJECT-ID-MUST-SURVIVE",
+        create_time: 1700000000000,
       }),
       "utf8",
     );
@@ -1214,6 +1216,19 @@ async function main() {
       "an unknown config key survives the round trip",
       JSON.stringify(saved.config?.future_setting) === JSON.stringify({ on: true }),
       saved.config?.future_setting,
+    );
+    // The reference overwrites only six keys when it saves, so the project
+    // id keeps the value it was loaded with. If it changed on every save,
+    // JianYing would treat the draft as a different project.
+    check(
+      "the project id survives the round trip",
+      saved.id === "PROJECT-ID-MUST-SURVIVE",
+      saved.id,
+    );
+    check(
+      "the project creation time survives the round trip",
+      saved.create_time === 1700000000000,
+      saved.create_time,
     );
   }
   check(
