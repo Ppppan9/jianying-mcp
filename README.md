@@ -17,7 +17,7 @@ path.
 The upstream community skill (`jianying-editor-skill`) works by asking the
 LLM to write a fresh Python script for every single edit. That produces
 non-reproducible output and litters your project with throwaway files. This
-project exposes the same capability as **12 deterministic MCP tools** — one
+project exposes the same capability as **13 deterministic MCP tools** — one
 call, one structured result, no code generation.
 
 ---
