@@ -1750,8 +1750,10 @@ export class Draft {
             staged("draft_meta_info.json", JSON.stringify(buildMetaInfo(this.name), null, 4));
             staged("draft_settings", [
                 "[General]",
-                "draft_create_time=0",
-                "draft_last_edit_time=0",
+                // The application writes the real time here, in seconds since the
+                // epoch. The reference template leaves both at zero.
+                `draft_create_time=${Math.floor(Date.now() / 1000)}`,
+                `draft_last_edit_time=${Math.floor(Date.now() / 1000)}`,
                 "real_edit_keys=1",
                 "real_edit_seconds=0",
                 "",
