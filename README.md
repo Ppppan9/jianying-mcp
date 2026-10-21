@@ -1,5 +1,8 @@
 # jianying-mcp
 
+[![Release](https://img.shields.io/github/v/release/Ppppan9/jianying-mcp.svg)](https://github.com/Ppppan9/jianying-mcp/releases/latest)
+[![License](https://img.shields.io/github/license/Ppppan9/jianying-mcp.svg)](LICENSE)
+
 **Generate JianYing Pro (剪映专业版) draft projects programmatically — as a MiniMax Code Plugin, an MCP server, or a standalone Node library.**
 
 Zero runtime dependencies. Cross-platform (macOS / Windows). No GUI automation.
@@ -52,6 +55,10 @@ same thing — but with a verified, documented implementation.
 git clone https://github.com/Ppppan9/jianying-mcp.git
 cp -r jianying-mcp/plugin ~/.minimax/plugins/jianying-editor
 ```
+
+Or take the prebuilt package from the
+[latest release](https://github.com/Ppppan9/jianying-mcp/releases/latest):
+`jianying-editor-plugin-v1.20.0.tar.gz` — self-contained, no build step.
 
 Restart MiniMax Code. The plugin is discovered automatically and the
 `jianying-editor` MCP server becomes available.
