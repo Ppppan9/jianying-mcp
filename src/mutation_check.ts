@@ -188,6 +188,14 @@ const MUTATIONS: Array<{ name: string; from: string; to: string; file?: string }
     file: "draft.ts",
   },
   {
+    // The application keys its project cache by this value, so two drafts
+    // that share one cannot be told apart.
+    name: "two drafts share an id",
+    from: "    this.draftId = randomUUID().toUpperCase();",
+    to: "    this.draftId = \"91E08AC5-22FB-47e2-9AA0-7DC300FAEA2B\";",
+    file: "draft.ts",
+  },
+  {
     name: "the subtitle flag is refused",
     from: "      subtitle: S.boolean(",
     to: "      subtitle: S.number(",
@@ -231,11 +239,11 @@ const MUTATIONS: Array<{ name: string; from: string; to: string; file?: string }
     file: "draft.ts",
   },
   {
-    // The reference overwrites six keys when it saves. If the engine writes
-    // the others too, the project id changes on every save.
+    // A loaded draft has to keep the identity it was given, or the
+    // application cannot find the project it belongs to.
     name: "the project id is rewritten on save",
-    from: "const MODELLED_TOP_LEVEL = new Set([\n  \"canvas_config\",",
-    to: "const MODELLED_TOP_LEVEL = new Set([\n  \"id\",\n  \"canvas_config\",",
+    from: "    if (typeof info.id === \"string\" && info.id.trim()) {\n      this.draftId = info.id.trim();\n    }",
+    to: "    // the loaded draft keeps the id it was given",
     file: "draft.ts",
   },
 ];

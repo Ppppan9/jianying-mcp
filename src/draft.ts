@@ -763,7 +763,7 @@ export class Draft {
    * registry. The application keys its project cache by it, so two drafts
    * must never share one.
    */
-  readonly draftId: string;
+  draftId: string;
   private unmodelledBuckets: Record<string, unknown> = {};
   /**
    * The top-level keys of a loaded draft that this engine does not write.
@@ -910,6 +910,13 @@ export class Draft {
     // Keep what the loaded draft held, so the save can put back anything
     // this engine does not model.
     this.loadedTopLevel = { ...info };
+
+    // A loaded draft keeps its own identity. The id has to be the same in
+    // the three files that mention it, and the draft already knows what it
+    // is.
+    if (typeof info.id === "string" && info.id.trim()) {
+      this.draftId = info.id.trim();
+    }
     this.loadedConfig =
       info.config && typeof info.config === "object" && !Array.isArray(info.config)
         ? { ...info.config }
@@ -2075,6 +2082,10 @@ export class Draft {
     // on every save and make JianYing treat the draft as a different
     // project.
     for (const [key, value] of Object.entries(this.loadedTopLevel)) {
+      // The id is written from the draft's own identity, which was taken
+      // from the loaded file, so it is not copied over a second time from
+      // somewhere else.
+      if (key === "id") continue;
       if (!MODELLED_TOP_LEVEL.has(key)) built[key] = value;
     }
 

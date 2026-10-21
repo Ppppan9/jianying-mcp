@@ -1230,6 +1230,41 @@ async function main() {
       saved.create_time === 1700000000000,
       saved.create_time,
     );
+
+    // The id has to be the same in the timeline file and in the draft's own
+    // registry entry. The application keys its project cache by it.
+    const meta = JSON.parse(
+      fs.readFileSync(path.join(extraDir, "draft_meta_info.json"), "utf8"),
+    );
+    check(
+      "the draft's own registry entry agrees about the id",
+      meta.draft_id === saved.id,
+      { meta: meta.draft_id, info: saved.id },
+    );
+  }
+
+  // Two drafts must not share an identity. The application keys its project
+  // cache by this value.
+  {
+    const first = await client.call("jianying_create_draft", {
+      name: "Identity_One", width: 1080, height: 1920, overwrite: true,
+    });
+    await client.call("jianying_save_draft", { name: "Identity_One" });
+    const second = await client.call("jianying_create_draft", {
+      name: "Identity_Two", width: 1080, height: 1920, overwrite: true,
+    });
+    await client.call("jianying_save_draft", { name: "Identity_Two" });
+    const one = JSON.parse(
+      fs.readFileSync(path.join(DRAFTS_ROOT, "Identity_One", "draft_info.json"), "utf8"),
+    );
+    const two = JSON.parse(
+      fs.readFileSync(path.join(DRAFTS_ROOT, "Identity_Two", "draft_info.json"), "utf8"),
+    );
+    check(
+      "two drafts do not share an id",
+      one.id !== two.id && typeof one.id === "string" && one.id.length === 36,
+      { one: one.id, two: two.id },
+    );
   }
   check(
     "loading and saving keeps the unmodelled material",
