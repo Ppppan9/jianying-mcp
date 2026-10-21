@@ -534,6 +534,32 @@ document: the reference keeps them, so this implementation does too.
 A generated draft is unchanged by all of this — there is nothing loaded to
 carry.
 
+### The draft follows the installed JianYing
+
+The format changed between releases. JianYing 11.6 has 56 material buckets
+where 5.9 had 45, `masks` was renamed `common_mask`, and the application
+writes a version string of `75.0.0` where the reference template writes
+`110.0.0`.
+
+That version string matters. The application checks the draft it opens —
+`DraftLoadVerifier::check_version_support`, with `newer_draft_version_detected`
+among its errors — so a draft that claims a version the installed
+application does not know may be refused outright.
+
+The application writes its own blank template, in plain JSON, into every
+draft it creates: `template.tmp`. That template says exactly what the
+installed version expects, so the engine reads it and follows it. The
+version string, the material buckets and the keys the installed version
+added all come from there.
+
+`JY_DRAFT_FORMAT=upstream` pins the draft to the reference
+implementation's format. The differential comparison needs that, so it
+compares two drafts produced the same way, and the suites that assert
+against fixed expectations pin it too.
+
+A machine without JianYing gets the reference format, which is what the
+upstream comparison produces.
+
 ### A draft that is not a draft is refused
 
 `draft_info.json` has to be an object with a `tracks` array. A file that
