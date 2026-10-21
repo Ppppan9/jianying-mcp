@@ -1908,8 +1908,10 @@ export class Draft {
   /** Builds the full draft_info.json payload. */
   buildDraftInfo(): Record<string, unknown> {
     const now = Date.now();
+    const template = localJianyingTemplate();
+
     const materials: Record<string, unknown> = {};
-    for (const key of EMPTY_MATERIAL_KEYS) materials[key] = [];
+    for (const key of localMaterialBuckets(template)) materials[key] = [];
 
     // Material buckets this engine does not model are written back exactly
     // as they were loaded. The reference implementation does the same with
@@ -1967,6 +1969,9 @@ export class Draft {
       }));
 
     const built: Record<string, unknown> = {
+      // The installed application's own template provides the keys this
+      // engine does not write, and the version string it version-checks.
+      ...localTemplateExtras(template),
       business_info: null,
       canvas_config: {
         height: this.canvasHeight,
@@ -2024,7 +2029,10 @@ export class Draft {
       materials,
       mutable_config: null,
       name: "",
-      new_version: "110.0.0",
+      // The application refuses a draft whose version it does not know, and
+      // the reference template claims a version newer than 11.6 writes. The
+      // installed template says which version that is.
+      new_version: template?.new_version ?? "110.0.0",
       platform: {
         app_id: 3704, app_source: "lv", app_version: "5.9.0", os: hostOs(),
       },
@@ -2423,6 +2431,89 @@ const MODELLED_TOP_LEVEL = new Set([
   "materials",
   "tracks",
 ]);
+
+/**
+ * Whether a draft should follow the installed JianYing's own format.
+ *
+ * `JY_DRAFT_FORMAT=upstream` pins the draft to the reference
+ * implementation's format, which is what the differential comparison needs:
+ * it has to compare two drafts produced the same way. The default follows
+ * the installed application, because a draft that does not match the
+ * version that is going to open it may be refused.
+ */
+function followsLocalFormat(): boolean {
+  return (process.env.JY_DRAFT_FORMAT ?? "auto").toLowerCase() !== "upstream";
+}
+
+/**
+ * The blank template the installed JianYing writes for itself.
+ *
+ * Every draft the application creates carries `template.tmp` — the plain
+ * JSON template of the format that version expects. It is the authoritative
+ * description of the installed version's format: 11.6 has 56 material
+ * buckets where 5.9 had 45, and `masks` was renamed `common_mask`. Reading
+ * the template is far more reliable than mapping an app version to a draft
+ * version by hand.
+ */
+let localTemplateCache: any | null | undefined;
+
+function localJianyingTemplate(): any | null {
+  if (!followsLocalFormat()) return null;
+  if (localTemplateCache !== undefined) return localTemplateCache;
+  localTemplateCache = null;
+  try {
+    const root = resolveDraftsRoot();
+    for (const name of fs.readdirSync(root)) {
+      const candidate = path.join(root, name, "template.tmp");
+      try {
+        const data = JSON.parse(fs.readFileSync(candidate, "utf8"));
+        if (
+          data &&
+          typeof data === "object" &&
+          !Array.isArray(data) &&
+          Array.isArray(data.tracks)
+        ) {
+          localTemplateCache = data;
+          break;
+        }
+      } catch {
+        /* not a template */
+      }
+    }
+  } catch {
+    /* no drafts root yet */
+  }
+  return localTemplateCache;
+}
+
+/**
+ * The top-level keys of the local template that this engine does not write.
+ *
+ * The template carries the defaults for keys a newer JianYing added, and
+ * they are part of what that version expects to find.
+ */
+function localTemplateExtras(template: any): Record<string, unknown> {
+  const extras: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(template ?? {})) {
+    if (key === "tracks" || key === "materials" || key === "canvas_config" || key === "config") {
+      continue;
+    }
+    extras[key] = value;
+  }
+  return extras;
+}
+
+/**
+ * The material buckets the installed version expects.
+ */
+function localMaterialBuckets(template: any): string[] {
+  const buckets = template?.materials;
+  if (buckets && typeof buckets === "object" && !Array.isArray(buckets)) {
+    const keys = Object.keys(buckets);
+    if (keys.length > 0) return keys;
+  }
+  return EMPTY_MATERIAL_KEYS;
+}
 
 /**
  * Names a JSON value for an error message.

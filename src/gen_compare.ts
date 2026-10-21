@@ -24,7 +24,7 @@ const DRAFTS_ROOT =
 const DRAFT_NAME = "Compare_Mcp";
 
 async function main() {
-  const client = new McpClient(SERVER, { JY_PROJECTS_ROOT: DRAFTS_ROOT });
+  const client = new McpClient(SERVER, { JY_PROJECTS_ROOT: DRAFTS_ROOT, JY_DRAFT_FORMAT: "upstream" });
   await client.initialize();
 
   // Canvas size is intentionally left unset so the automatic resolution

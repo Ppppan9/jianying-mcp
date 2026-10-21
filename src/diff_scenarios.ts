@@ -281,7 +281,7 @@ print("SAVED")
 // ---------------------------------------------------------------------------
 
 async function runMcp(scenario: Scenario, outRoot: string): Promise<string> {
-  const client = new McpClient(SERVER, { JY_PROJECTS_ROOT: outRoot });
+  const client = new McpClient(SERVER, { JY_PROJECTS_ROOT: outRoot, JY_DRAFT_FORMAT: "upstream" });
   await client.initialize();
   const name = "Mcp_" + scenario.name;
   await client.call("jianying_create_draft", { name, width: 1920, height: 1080, fps: 30 });

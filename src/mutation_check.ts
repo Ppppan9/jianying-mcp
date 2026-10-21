@@ -179,6 +179,15 @@ const MUTATIONS: Array<{ name: string; from: string; to: string; file?: string }
     file: "schema_validate.ts",
   },
   {
+    // The application version-checks the draft's version string, so a draft
+    // that claims a version the installed application does not know may be
+    // refused outright.
+    name: "the installed format is ignored",
+    from: "      new_version: template?.new_version ?? \"110.0.0\",",
+    to: "      new_version: \"110.0.0\",",
+    file: "draft.ts",
+  },
+  {
     name: "the subtitle flag is refused",
     from: "      subtitle: S.boolean(",
     to: "      subtitle: S.number(",
@@ -253,6 +262,7 @@ function suitePasses(): boolean {
     // can see is still a hole.
     if (!run("node", [path.join(BUILD, "verify.js"), MEDIA, work])) return false;
     if (!run("node", [path.join(BUILD, "protocol_check.js")])) return false;
+    if (!run("node", [path.join(BUILD, "format_check.js")])) return false;
     return true;
   } finally {
     fs.rmSync(work, { recursive: true, force: true });

@@ -59,7 +59,7 @@ async function main() {
   console.log(`  media:       ${HAS_MEDIA ? MEDIA_DIR : "(missing — run scripts/make_test_media.sh)"}`);
   console.log(`  drafts root: ${DRAFTS_ROOT}\n`);
 
-  const client = new McpClient(SERVER, { JY_PROJECTS_ROOT: DRAFTS_ROOT });
+  const client = new McpClient(SERVER, { JY_PROJECTS_ROOT: DRAFTS_ROOT, JY_DRAFT_FORMAT: "upstream" });
 
   // --- handshake ---------------------------------------------------------
   console.log("\x1b[1m[1] MCP handshake & tool surface\x1b[0m");

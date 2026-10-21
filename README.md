@@ -192,6 +192,9 @@ node dist/docs_check.js
 
 # 8. a hostile draft must not crash the server
 node dist/loader_check.js
+
+# 9. the draft has to match the installed JianYing
+node dist/format_check.js
 ```
 
 ```
@@ -205,6 +208,7 @@ node dist/loader_check.js
 [7] mutation_check.js   Mutations: 32 of 32 caught, 0 survived
 [8] docs_check.js      Documentation: 40 passed, 0 failed
 [9] loader_check.js    Loader: 20 passed, 0 failed
+[10] format_check.js   Format: 7 passed, 0 failed
 ```
 
 The fifth suite is a different question from the others: not "does the draft
@@ -429,6 +433,7 @@ redistributed here.
 [7] mutation_check.js   Mutations: 32 of 32 caught, 0 survived
 [8] docs_check.js      Documentation: 40 passed, 0 failed
 [9] loader_check.js    Loader: 20 passed, 0 failed
+[10] format_check.js   Format: 7 passed, 0 failed
 ```
 
 The fifth suite is a different question from the others: not "does the draft

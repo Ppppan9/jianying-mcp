@@ -42,6 +42,9 @@ jobs:
       - name: Loader check — a hostile draft must not crash the server
         run: node dist/loader_check.js
 
+      - name: Format check — the draft has to match the installed JianYing
+        run: node dist/format_check.js
+
       - name: Generate the hands-on verification drafts
         run: node dist/make_verify_drafts.js ./verify-media ./verify-drafts
 

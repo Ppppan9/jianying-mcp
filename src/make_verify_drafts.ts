@@ -10,6 +10,7 @@
 
 import fs from "node:fs";
 import path from "node:path";
+import os from "node:os";
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { McpClient } from "./mcp-client.js";
@@ -78,6 +79,13 @@ async function main() {
   ensureMedia();
   fs.rmSync(OUT, { recursive: true, force: true });
   fs.mkdirSync(OUT, { recursive: true });
+
+  // The engine follows the format of the JianYing installed on this machine,
+  // and it finds that format by reading the template the application writes
+  // into its drafts root. The pack is generated somewhere else, so the
+  // template is copied in — otherwise the pack would be written in a format
+  // the installed application does not expect.
+  seedLocalTemplate();
 
   const client = new McpClient(SERVER, { JY_PROJECTS_ROOT: OUT });
   await client.initialize();
@@ -170,10 +178,31 @@ async function main() {
   await client.call("jianying_save_draft", { name: resume });
 
   // ---------------------------------------------------------------------
+  // 4. 对照 —— 用参考实现的格式写一份，用来分辨打不开是格式的问题还是别的
+  // ---------------------------------------------------------------------
+  const upstream = new McpClient(SERVER, {
+    JY_PROJECTS_ROOT: OUT,
+    JY_DRAFT_FORMAT: "upstream",
+  });
+  await upstream.initialize();
+  const control = "04_对照_上游格式";
+  await upstream.call("jianying_create_draft", {
+    name: control, width: 1080, height: 1920, fps: 30, overwrite: true,
+  });
+  await upstream.call("jianying_add_video", {
+    name: control, filePath: media("01_开场.mp4"), start: 0, duration: 3,
+  });
+  await upstream.call("jianying_add_text", {
+    name: control, text: "上游格式对照", start: 0.5, duration: 2, track: 1,
+  });
+  await upstream.call("jianying_save_draft", { name: control });
+  await upstream.close();
+
+  // ---------------------------------------------------------------------
   // Report
   // ---------------------------------------------------------------------
   console.log("\n生成的验证草稿：\n");
-  for (const name of [basic, edge, resume]) {
+  for (const name of [basic, edge, resume, control]) {
     const dir = path.join(OUT, name);
     const info = JSON.parse(
       fs.readFileSync(path.join(dir, "draft_info.json"), "utf8"),
@@ -194,3 +223,54 @@ main().catch((e) => {
   console.error(e);
   process.exit(1);
 });
+
+/**
+ * Copies the installed JianYing's own template into the output directory.
+ *
+ * The engine reads that template to learn which draft format the installed
+ * version expects — the version string it checks, the material buckets it
+ * knows, and the keys it added. Without it the pack is written in the
+ * reference implementation's format, which an 11.x application may refuse.
+ */
+function seedLocalTemplate(): void {
+  const source = findLocalTemplate();
+  if (!source) {
+    console.log(
+      "本机没有找到剪映的模板，草稿将按参考实现的格式生成。",
+    );
+    return;
+  }
+  const target = path.join(OUT, "_template");
+  fs.mkdirSync(target, { recursive: true });
+  fs.copyFileSync(source, path.join(target, "template.tmp"));
+  console.log(`已带上本机剪映的模板: ${source}`);
+}
+
+/** Finds a `template.tmp` in the real drafts root. */
+function findLocalTemplate(): string | null {
+  const roots = [
+    "~/Library/Containers/com.lemon.jianyingpro/Data/Library/Application Support/JianyingPro/User Data/Projects/com.lveditor.draft",
+    "~/Library/Containers/com.lemon.lvpro/Data/Library/Application Support/JianyingPro/User Data/Projects/com.lveditor.draft",
+    "~/Movies/JianyingPro/User Data/Projects/com.lveditor.draft",
+    "~/Movies/JianyingPro Drafts",
+  ];
+  for (const candidate of roots) {
+    const root = path.join(os.homedir(), candidate.replace(/^~\//, ""));
+    let entries: string[];
+    try {
+      entries = fs.readdirSync(root);
+    } catch {
+      continue;
+    }
+    for (const name of entries) {
+      const template = path.join(root, name, "template.tmp");
+      try {
+        const data = JSON.parse(fs.readFileSync(template, "utf8"));
+        if (data && typeof data === "object" && Array.isArray(data.tracks)) return template;
+      } catch {
+        /* not a template */
+      }
+    }
+  }
+  return null;
+}

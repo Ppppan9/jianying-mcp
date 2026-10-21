@@ -53,7 +53,7 @@ async function expectRefusal(
 
 async function main() {
   fs.rmSync(WORK, { recursive: true, force: true });
-  const client = new McpClient(SERVER, { JY_PROJECTS_ROOT: WORK });
+  const client = new McpClient(SERVER, { JY_PROJECTS_ROOT: WORK, JY_DRAFT_FORMAT: "upstream" });
   await client.initialize();
 
   console.log("\n\x1b[1mGuard coverage\x1b[0m\n");

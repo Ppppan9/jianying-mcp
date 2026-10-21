@@ -1,7 +1,7 @@
 {
   "name": "jianying-mcp",
   "version": "1.0.0",
-  "description": "MiniMax-native MCP server for JianYing (\u526a\u6620) draft automation \u2014 zero runtime dependencies",
+  "description": "MiniMax-native MCP server for JianYing (剪映) draft automation — zero runtime dependencies",
   "type": "module",
   "main": "dist/server.js",
   "bin": {
@@ -19,9 +19,10 @@
     "protocol": "node dist/protocol_check.js ./test-media",
     "loader": "node dist/loader_check.js",
     "docs": "node dist/docs_check.js",
-    "check": "npm run build && npm run sync-plugin && git diff --exit-code plugin/ && node dist/verify.js && node dist/protocol_check.js ./test-media && node dist/guard_coverage.js ./test-media ./out_drafts/guards && node dist/loader_check.js && node dist/docs_check.js",
+    "check": "npm run build && npm run sync-plugin && git diff --exit-code plugin/ && node dist/verify.js && node dist/protocol_check.js ./test-media && node dist/guard_coverage.js ./test-media ./out_drafts/guards && node dist/loader_check.js && node dist/docs_check.js && node dist/format_check.js",
     "verify-drafts": "node dist/make_verify_drafts.js",
-    "mutation": "node dist/mutation_check.js"
+    "mutation": "node dist/mutation_check.js",
+    "format": "node dist/format_check.js"
   },
   "keywords": [
     "jianying",
@@ -31,7 +32,7 @@
     "model-context-protocol",
     "video-editing",
     "minimax",
-    "\u526a\u6620"
+    "剪映"
   ],
   "license": "MIT",
   "author": "Hou Tao",
